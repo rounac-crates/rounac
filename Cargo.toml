@@ -1,0 +1,11 @@
+[package]
+name = "rounac"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96.0"
+description = "A Rust interpretation of the OMS CAL specification."
+repository = "https://github.com/rounac-crates/rounac"
+readme = "README.md"
+license = "MIT or Apache-2.0"
+
+[dependencies]
