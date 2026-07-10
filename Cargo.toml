@@ -9,9 +9,11 @@ readme = "README.md"
 license = "MIT or Apache-2.0"
 
 [dependencies]
+rand = "0.10.2"
 rounac-agra = { version = "0.0.0", optional = true }
 rounac-uci = { version = "0.0.0", optional = true }
+uuid = { version = "1.23.4", features = ["v4"] }
 
 [features]
-agra-5_0 = ["rounac-uci:v5_0"]
-uci-2_5 = ["rounac-uci:v2_5"]
+agra-5_0 = ["rounac-agra/v5_0"]
+uci-2_5 = ["rounac-uci/v2_5"]
