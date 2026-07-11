@@ -8,7 +8,7 @@
 use std::{
 	default::Default,
 	sync::{
-		RwLock,
+		Arc, RwLock,
 		atomic::{AtomicUsize, Ordering},
 	},
 	thread,
@@ -16,12 +16,14 @@ use std::{
 };
 use uuid::Uuid;
 
-struct CalError;
+#[derive(Clone, Copy, Debug)]
+pub struct CalError;
 
 /// Possible states of the ASB.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AsbConnStatus {
-	Initializing,
+pub enum AsbConnStatus {
+	// This should always be 0 so default [Asb] has a sensible value.
+	Initializing = 0,
 	Normal,
 	Degraded,
 	Inoperable,
@@ -41,19 +43,28 @@ impl TryFrom<usize> for AsbConnStatus {
 	}
 }
 
+/// Empty trait that simply groups the desired closure with [Send] and [Sync].
+pub trait AsbStatusListener: Fn(AsbConnStatus) + Send + Sync {}
+impl<T: Fn(AsbConnStatus) + Send + Sync> AsbStatusListener for T {}
+
 /// Abstract Service Bus.
-struct Asb {
+pub struct Asb {
 	system_uuid: Uuid,
 	service_uuid: Uuid,
 	/// The current status as an integer representing a variant of [AsbConnStatus].
 	status: AtomicUsize,
 	/// Vector of `(id, fn)` where `id` is a random number to remove `fn` later.
-	status_listeners: RwLock<Vec<(u32, fn(AsbConnStatus))>>,
+	status_listeners: RwLock<Vec<(u32, Arc<dyn AsbStatusListener>)>>,
 }
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
-	fn new(service_name: &str) -> Result<Self, CalError> {
-		Err(CalError)
+	pub fn new(service_name: &str) -> Result<Self, CalError> {
+		Ok(Asb {
+			system_uuid: Uuid::new_v4(),
+			service_uuid: Uuid::new_v4(),
+			status: AtomicUsize::default(),
+			status_listeners: RwLock::new(Vec::new()),
+		})
 	}
 
 	/// Get the current status of this ASB.
@@ -71,14 +82,14 @@ impl Asb {
 	}
 
 	/// Register a function to be called whenever the status of this ASB changes.
-	pub fn add_status_listener(&self, fun: fn(AsbConnStatus)) -> u32 {
+	pub fn add_status_listener(&self, fun: Arc<dyn AsbStatusListener>) -> u32 {
 		// Add function to listeners vec.
 		let mut listeners = self.status_listeners.write().unwrap();
 		let id = rand::random();
+		let f = fun.clone();
 		listeners.push((id, fun));
 
 		// Call the function immediately with current status.
-		let f = fun.clone();
 		let status = self.get_connection_status();
 		thread::spawn(move || f(status));
 
@@ -89,7 +100,7 @@ impl Asb {
 	/// Remove the listener identified with `id`, returning `true` if it exists.
 	pub fn remove_status_listener(&self, id: u32) -> bool {
 		let mut listeners = self.status_listeners.write().unwrap();
-		if let Some(idx) = listeners.iter().position(|&f| f.0 == id) {
+		if let Some(idx) = listeners.iter().position(|f| f.0 == id) {
 			// Swap remove since order is not important.
 			listeners.swap_remove(idx);
 
@@ -103,14 +114,14 @@ impl Asb {
 	fn call_status_listeners(&self, status: AsbConnStatus) {
 		let listeners = self.status_listeners.read().unwrap();
 		for listener in listeners.iter() {
-			let f = listener.1;
+			let f = listener.1.clone();
 			thread::spawn(move || f(status));
 		}
 	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ReliabilityQos {
+pub enum ReliabilityQos {
 	Reliable,
 	BestEffort,
 }
@@ -120,7 +131,7 @@ impl Default for ReliabilityQos {
 	}
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct QosSettings {
+pub struct QosSettings {
 	time_based_filter: Option<Duration>,
 	reliability: ReliabilityQos,
 	expiration: Option<Duration>,
@@ -138,3 +149,63 @@ impl Default for QosSettings {
 }
 
 struct Topic {}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	/// Test that a status listener is correctly called for each status.
+	#[test]
+	fn status_listener() {
+		use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+		// Create ASB and manually set the status to ensure consistency.
+		let asb = Asb::new("").unwrap();
+		asb.status
+			.store(AsbConnStatus::Initializing as usize, Ordering::Relaxed);
+
+		// Variables for this thread
+		let call_count = Arc::new(AtomicUsize::default());
+		let init_hit = Arc::new(AtomicBool::default());
+		let norm_hit = Arc::new(AtomicBool::default());
+		let degr_hit = Arc::new(AtomicBool::default());
+		let inop_hit = Arc::new(AtomicBool::default());
+		let fail_hit = Arc::new(AtomicBool::default());
+
+		// Variables for listener thread
+		let count = call_count.clone();
+		let init = init_hit.clone();
+		let norm = norm_hit.clone();
+		let degr = degr_hit.clone();
+		let inop = inop_hit.clone();
+		let fail = fail_hit.clone();
+
+		// Add the listener.
+		asb.add_status_listener(Arc::new(move |status| {
+			count.fetch_add(1, Ordering::Relaxed);
+			match status {
+				AsbConnStatus::Initializing => init.store(true, Ordering::Relaxed),
+				AsbConnStatus::Normal => norm.store(true, Ordering::Relaxed),
+				AsbConnStatus::Degraded => degr.store(true, Ordering::Relaxed),
+				AsbConnStatus::Inoperable => inop.store(true, Ordering::Relaxed),
+				AsbConnStatus::Failed => fail.store(true, Ordering::Relaxed),
+			};
+		}));
+		asb.set_connection_status(AsbConnStatus::Normal);
+		asb.set_connection_status(AsbConnStatus::Degraded);
+		asb.set_connection_status(AsbConnStatus::Inoperable);
+		asb.set_connection_status(AsbConnStatus::Failed);
+
+		// Ensure listener was called the correct number of times.
+		while call_count.load(Ordering::Acquire) != 5 {
+			std::hint::spin_loop();
+		}
+
+		// Check that every state was reached
+		assert!(init_hit.load(Ordering::Acquire));
+		assert!(norm_hit.load(Ordering::Acquire));
+		assert!(degr_hit.load(Ordering::Acquire));
+		assert!(inop_hit.load(Ordering::Acquire));
+		assert!(fail_hit.load(Ordering::Acquire));
+	}
+}
