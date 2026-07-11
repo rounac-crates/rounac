@@ -7,6 +7,7 @@
 
 use std::{
 	default::Default,
+	marker::PhantomData,
 	sync::{
 		Arc, RwLock,
 		atomic::{AtomicUsize, Ordering},
@@ -118,9 +119,20 @@ impl Asb {
 			thread::spawn(move || f(status));
 		}
 	}
+
+	/// Return the [Uuid] of the system this ASB resides on.
+	pub fn get_system_uuid(&self) -> Uuid {
+		self.system_uuid
+	}
+
+	/// Return the [Uuid] of the service that initialized this [Asb] object.
+	pub fn get_service_uuid(&self) -> Uuid {
+		self.service_uuid
+	}
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Reliability types for a CAL.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ReliabilityQos {
 	Reliable,
 	BestEffort,
@@ -130,7 +142,9 @@ impl Default for ReliabilityQos {
 		ReliabilityQos::BestEffort
 	}
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+
+/// Quality-of-Service settings for the CAL.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct QosSettings {
 	time_based_filter: Option<Duration>,
 	reliability: ReliabilityQos,
@@ -148,7 +162,23 @@ impl Default for QosSettings {
 	}
 }
 
-struct Topic {}
+/// CAL topic. A combination of name, QoS, and a message type.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Topic<T> {
+	pub name: String,
+	pub qos: QosSettings,
+	message_type: PhantomData<T>,
+}
+// TODO: Restrict T to be a valid type for sending (minimum serde, possibly specific message trait)
+impl<T> Topic<T> {
+	pub fn new(name: String, qos: QosSettings) -> Self {
+		Topic {
+			name,
+			qos,
+			message_type: PhantomData,
+		}
+	}
+}
 
 #[cfg(test)]
 mod test {
