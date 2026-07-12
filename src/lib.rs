@@ -5,6 +5,9 @@
 //! [1]: https://gitlab.com/open-arsenal/oms/standard
 //! [2]: https://gitlab.com/open-arsenal/uci/standard
 
+pub mod config;
+
+use config::AsbConfig;
 use std::{
 	default::Default,
 	marker::PhantomData,
@@ -16,8 +19,6 @@ use std::{
 	time::Duration,
 };
 use uuid::Uuid;
-
-pub mod config;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CalError;
@@ -61,10 +62,17 @@ pub struct Asb {
 }
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
-	pub fn new(service_name: &str) -> Result<Self, CalError> {
+	pub fn new(service_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
+		// Get system and service UUIDs from given config, otherwise generate one.
+		let system_uuid = config.system_uuid.unwrap_or(Uuid::new_v4());
+		let service_uuid = match config.services.get(service_name) {
+			Some(service_conf) => service_conf.service_uuid,
+			None => Uuid::new_v4(),
+		};
+
 		Ok(Asb {
-			system_uuid: Uuid::new_v4(),
-			service_uuid: Uuid::new_v4(),
+			system_uuid,
+			service_uuid,
 			status: AtomicUsize::default(),
 			status_listeners: RwLock::new(Vec::new()),
 		})
@@ -192,7 +200,7 @@ mod test {
 		use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 		// Create ASB and manually set the status to ensure consistency.
-		let asb = Asb::new("").unwrap();
+		let asb = Asb::new("", &AsbConfig::default()).unwrap();
 		asb.status
 			.store(AsbConnStatus::Initializing as usize, Ordering::Relaxed);
 

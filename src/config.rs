@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AsbConfig {
 	pub(crate) system_uuid: Option<Uuid>,
 	pub(crate) services: HashMap<String, ServiceConfig>,
