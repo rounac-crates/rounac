@@ -17,6 +17,8 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod config;
+
 #[derive(Clone, Copy, Debug)]
 pub struct CalError;
 
