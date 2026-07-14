@@ -1,3 +1,3 @@
 //! Module for the network related types.
 
-mod amqprs;
+pub mod amqprs;
