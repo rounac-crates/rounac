@@ -18,6 +18,13 @@ impl CalError {
 	pub fn kind(&self) -> CalErrorKind {
 		self.kind
 	}
+
+	pub fn config_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Config,
+			data: msg.into(),
+		}
+	}
 }
 impl Error for CalError {}
 impl fmt::Debug for CalError {
