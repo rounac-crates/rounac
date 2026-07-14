@@ -1,6 +1,6 @@
 //! AMQPRS related utilities
 
-use crate::config::AsbConfig;
+use crate::config::{AsbConfig, NetworkKind};
 use amqprs::connection::OpenConnectionArguments;
 use toml::Value;
 
@@ -9,7 +9,7 @@ pub fn open_args_from_config(name: &str, config: AsbConfig) -> Option<OpenConnec
 	let network = config.networks.get(name)?;
 
 	// Verify this network is the correct type.
-	if network.kind.to_lowercase() != "amqprs" {
+	if network.kind != NetworkKind::Amqp {
 		return None;
 	}
 

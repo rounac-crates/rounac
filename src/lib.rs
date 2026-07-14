@@ -65,10 +65,12 @@ pub struct Asb {
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
 	pub fn new(service_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
+		let service_config = config.services.get(service_name);
+
 		// Get system and service UUIDs from given config, otherwise generate one.
 		let system_uuid = config.system_uuid.unwrap_or(Uuid::new_v4());
-		let service_uuid = match config.services.get(service_name) {
-			Some(service_conf) => service_conf.service_uuid,
+		let service_uuid = match service_config {
+			Some(conf) => conf.service_uuid,
 			None => Uuid::new_v4(),
 		};
 

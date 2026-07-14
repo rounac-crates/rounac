@@ -22,14 +22,32 @@ impl FromStr for AsbConfig {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct ServiceConfig {
 	pub(crate) service_uuid: Uuid,
-	pub(crate) network: Option<String>,
+	pub(crate) network: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct NetworkConfig {
-	pub(crate) kind: String,
+	pub(crate) kind: NetworkKind,
 	#[serde(flatten)]
 	pub(crate) params: Table,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum NetworkKind {
+	Amqp,
+	/// The lack of any network. Useful for testing or quick config changes.
+	Null,
+}
+impl FromStr for NetworkKind {
+	type Err = &'static str;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s.to_lowercase().as_str() {
+			"amqp" => Ok(NetworkKind::Amqp),
+			"null" => Ok(NetworkKind::Null),
+			_ => Err("unrecognized network kind"),
+		}
+	}
 }
 
 #[cfg(test)]
@@ -51,11 +69,13 @@ mod test {
 			"my_service".to_string(),
 			ServiceConfig {
 				service_uuid: uuid::uuid!("00000000-0000-4000-8000-0123456789AB"),
+				network: String::new(),
 			},
 		);
 		let expected = AsbConfig {
 			system_uuid: Some(Uuid::nil()),
 			services,
+			networks: HashMap::new(),
 		};
 
 		let parsed: AsbConfig = CONFIG.parse().unwrap();
