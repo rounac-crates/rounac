@@ -1,6 +1,12 @@
 # Rounac
 The Rust [OMS][1] [UCI][2] Not-A-CAL; pronounced "Runic".
 
+# Supported transports
+## AMQP (in progress)
+## ZeroMQ (desired)
+## MQTT (desired)
+## NATS (desired)
+
 # CAL spec certs
 | CERT ID | Planned compliance | Reason | Implemented |
 |---|---|---|---|
