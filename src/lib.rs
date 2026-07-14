@@ -6,14 +6,15 @@
 //! [2]: https://gitlab.com/open-arsenal/uci/standard
 
 pub mod config;
+pub mod error;
 mod networks;
+
+pub use crate::error::{CalError, CalErrorKind};
 
 use amqprs::connection::Connection;
 use config::AsbConfig;
 use std::{
 	default::Default,
-	error::Error,
-	fmt::{self, Display},
 	marker::PhantomData,
 	sync::{
 		Arc, RwLock,
@@ -23,32 +24,6 @@ use std::{
 	time::Duration,
 };
 use uuid::Uuid;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CalErrorKind {
-	General,
-	Config,
-}
-pub struct CalError {
-	kind: CalErrorKind,
-	data: Box<dyn Error>,
-}
-impl CalError {
-	pub fn kind(&self) -> CalErrorKind {
-		self.kind
-	}
-}
-impl Error for CalError {}
-impl fmt::Debug for CalError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		Display::fmt(self, f)
-	}
-}
-impl Display for CalError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		writeln!(f, "CalError({:?}): {}", self.kind, self.data)
-	}
-}
 
 /// Possible states of the ASB.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
