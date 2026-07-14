@@ -6,7 +6,9 @@
 //! [2]: https://gitlab.com/open-arsenal/uci/standard
 
 pub mod config;
+mod networks;
 
+use amqprs::connection::Connection;
 use config::AsbConfig;
 use std::{
 	default::Default,
@@ -139,6 +141,11 @@ impl Asb {
 	pub fn get_service_uuid(&self) -> Uuid {
 		self.service_uuid
 	}
+
+	/// Create a new [AsbReader] for the given [Topic]
+	pub fn new_reader<T>(&self, topic: Topic<T>) -> Result<AsbReader<T>, CalError> {
+		Ok(AsbReader { topic })
+	}
 }
 
 /// Reliability types for a CAL.
@@ -188,6 +195,14 @@ impl<T> Topic<T> {
 			message_type: PhantomData,
 		}
 	}
+}
+
+pub struct AsbReader<T> {
+	topic: Topic<T>,
+}
+
+pub struct AsbWriter<T> {
+	topic: Topic<T>,
 }
 
 #[cfg(test)]

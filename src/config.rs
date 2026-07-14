@@ -2,12 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
+use toml::Table;
 use uuid::Uuid;
 
 #[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AsbConfig {
 	pub(crate) system_uuid: Option<Uuid>,
 	pub(crate) services: HashMap<String, ServiceConfig>,
+	pub(crate) networks: HashMap<String, NetworkConfig>,
 }
 impl FromStr for AsbConfig {
 	type Err = toml::de::Error;
@@ -20,6 +22,14 @@ impl FromStr for AsbConfig {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct ServiceConfig {
 	pub(crate) service_uuid: Uuid,
+	pub(crate) network: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct NetworkConfig {
+	pub(crate) kind: String,
+	#[serde(flatten)]
+	pub(crate) params: Table,
 }
 
 #[cfg(test)]
