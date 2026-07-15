@@ -81,6 +81,8 @@ impl Asb {
 			None => Uuid::new_v4(),
 		};
 
+		// TODO: Launch background thread for all async and receiving stuff.
+
 		Ok(Asb {
 			system_uuid,
 			service_uuid,
@@ -218,6 +220,37 @@ pub struct AsbWriter<T> {
 #[cfg(test)]
 mod test {
 	use super::*;
+	use crate::config::{NetworkConfig, NetworkKind, ServiceConfig};
+	use std::collections::HashMap;
+	use toml::Table;
+
+	fn new_asb() -> Asb {
+		let mut networks = HashMap::new();
+		networks.insert(
+			"null".to_string(),
+			NetworkConfig {
+				kind: NetworkKind::Null,
+				params: Table::new(),
+			},
+		);
+
+		let mut services = HashMap::new();
+		services.insert(
+			"my_service".to_string(),
+			ServiceConfig {
+				service_uuid: None,
+				network: "null".to_string(),
+			},
+		);
+
+		let config: AsbConfig = AsbConfig {
+			system_uuid: None,
+			networks,
+			services,
+		};
+
+		Asb::new("my_service", &config).unwrap()
+	}
 
 	/// Test that a status listener is correctly called for each status.
 	#[test]
@@ -225,7 +258,7 @@ mod test {
 		use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 		// Create ASB and manually set the status to ensure consistency.
-		let asb = Asb::new("", &AsbConfig::default()).unwrap();
+		let asb = new_asb();
 		asb.status
 			.store(AsbConnStatus::Initializing as usize, Ordering::Relaxed);
 
