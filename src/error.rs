@@ -3,12 +3,15 @@
 use std::{
 	error::Error,
 	fmt::{self, Display},
+	io,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CalErrorKind {
-	General,
 	Config,
+	Io,
+	Network,
+	Other,
 }
 pub struct CalError {
 	kind: CalErrorKind,
@@ -36,4 +39,25 @@ impl Display for CalError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		writeln!(f, "CalError({:?}): {}", self.kind, self.data)
 	}
+}
+
+/// Macro to automate the [From] impls for various errors to [CalError].
+macro_rules! calerror_conversions {
+	{
+		$($error:ty => $kind:expr)*
+	} => {$(
+		impl From<$error> for CalError {
+			fn from(e: $error) -> Self {
+				CalError {
+					kind: $kind,
+					data: e.into(),
+				}
+			}
+		}
+	)*}
+}
+
+calerror_conversions! {
+	io::Error => CalErrorKind::Io
+	amqprs::error::Error => CalErrorKind::Network
 }
