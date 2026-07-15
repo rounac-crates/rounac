@@ -10,8 +10,8 @@ pub mod error;
 mod networks;
 
 pub use crate::error::{CalError, CalErrorKind};
+use crate::networks::AsbConnection;
 
-use amqprs::connection::Connection;
 use config::AsbConfig;
 use std::{
 	default::Default,
@@ -61,16 +61,23 @@ pub struct Asb {
 	status: AtomicUsize,
 	/// Vector of `(id, fn)` where `id` is a random number to remove `fn` later.
 	status_listeners: RwLock<Vec<(u32, Arc<dyn AsbStatusListener>)>>,
+	//runtime: tokio::runtime::Runtime, // Maybe only use if async asb.
+	/// Data specific to this ASB's network connection.
+	connection: AsbConnection,
 }
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
 	pub fn new(service_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
-		let service_config = config.services.get(service_name);
+		let Some(service_config) = config.services.get(service_name) else {
+			return Err(CalError::config_err(format!(
+				"Missing service config for {service_name}"
+			)));
+		};
 
 		// Get system and service UUIDs from given config, otherwise generate one.
 		let system_uuid = config.system_uuid.unwrap_or(Uuid::new_v4());
-		let service_uuid = match service_config {
-			Some(conf) => conf.service_uuid,
+		let service_uuid = match service_config.service_uuid {
+			Some(u) => u,
 			None => Uuid::new_v4(),
 		};
 
@@ -79,6 +86,7 @@ impl Asb {
 			service_uuid,
 			status: AtomicUsize::default(),
 			status_listeners: RwLock::new(Vec::new()),
+			connection: AsbConnection::connect(&service_config.network, config)?,
 		})
 	}
 

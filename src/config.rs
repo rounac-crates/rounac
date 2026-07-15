@@ -21,7 +21,7 @@ impl FromStr for AsbConfig {
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct ServiceConfig {
-	pub(crate) service_uuid: Uuid,
+	pub(crate) service_uuid: Option<Uuid>,
 	pub(crate) network: String,
 }
 
@@ -62,14 +62,17 @@ mod test {
 
 		[services.my_service]
 		service_uuid = "00000000-0000-4000-8000-0123456789AB"
+		network = "null"
+
+		[networks]
 		"#;
 
 		let mut services = HashMap::new();
 		services.insert(
 			"my_service".to_string(),
 			ServiceConfig {
-				service_uuid: uuid::uuid!("00000000-0000-4000-8000-0123456789AB"),
-				network: String::new(),
+				service_uuid: Some(uuid::uuid!("00000000-0000-4000-8000-0123456789AB")),
+				network: "null".to_string(),
 			},
 		);
 		let expected = AsbConfig {
