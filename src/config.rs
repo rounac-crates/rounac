@@ -5,7 +5,7 @@ use std::{collections::HashMap, str::FromStr};
 use toml::Table;
 use uuid::Uuid;
 
-#[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AsbConfig {
 	pub(crate) system_uuid: Option<Uuid>,
 	pub(crate) services: HashMap<String, ServiceConfig>,
@@ -19,20 +19,20 @@ impl FromStr for AsbConfig {
 	}
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ServiceConfig {
 	pub(crate) service_uuid: Option<Uuid>,
 	pub(crate) network: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct NetworkConfig {
 	pub(crate) kind: NetworkKind,
 	#[serde(flatten)]
 	pub(crate) params: Table,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum NetworkKind {
 	Amqp,
 	/// The lack of any network. Useful for testing or quick config changes.
