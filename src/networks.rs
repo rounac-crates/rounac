@@ -13,6 +13,8 @@ use amqprs::{
 	channel::{BasicConsumeArguments, QueueDeclareArguments},
 	connection::Connection,
 };
+use ringbuf::{SharedRb, storage::Heap, traits::Split};
+use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime};
 
 pub enum AsbConnection {
@@ -65,7 +67,7 @@ impl AsbConnection {
 		&self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
-	) -> Result<AsbReader, CalError> {
+	) -> Result<AsbReader<T>, CalError> {
 		match self {
 			AsbConnection::Amqp(rt, a) => {
 				// Create a queue for this topic
@@ -83,6 +85,9 @@ impl AsbConnection {
 				// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
 				let consume_args = BasicConsumeArguments::new(&topic_name, "");
 
+				// Create a ring buffer and split into producer and consumer.
+				let (prod, cons) = ringbuf::HeapRb::<T>::new(topic.qos.buffer).split();
+
 				rt.block_on(async {
 					// Declare queue
 					a.chan.queue_declare(declare_args).await?;
@@ -95,6 +100,8 @@ impl AsbConnection {
 					Ok::<_, amqprs::error::Error>(())
 				})?;
 
+				let a = AsbReader::Amqp(cons);
+
 				Err(CalError::other_err("Not implemented".to_string()))
 			}
 			AsbConnection::Null => Ok(AsbReader::Null),
@@ -102,8 +109,8 @@ impl AsbConnection {
 	}
 }
 
-pub enum AsbReader {
-	Amqp,
+pub enum AsbReader<T> {
+	Amqp(ringbuf::CachingCons<Arc<SharedRb<Heap<T>>>>),
 	Null,
 }
 
