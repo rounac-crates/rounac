@@ -3,9 +3,13 @@ The Rust [OMS][1] [UCI][2] Not-A-CAL; pronounced "Runic".
 
 # Supported transports
 ## AMQP (in progress)
+`amqprs`
 ## ZeroMQ (desired)
+`zeromq` (Rust native) or `zmq` (libzmq wrapper).
 ## MQTT (desired)
+`rumqttc`
 ## NATS (desired)
+`async-nats`
 
 # CAL spec certs
 | CERT ID | Planned compliance | Reason | Implemented |
