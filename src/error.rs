@@ -11,6 +11,7 @@ pub enum CalErrorKind {
 	Config,
 	Io,
 	Network,
+	Topic,
 	Other,
 }
 pub struct CalError {
@@ -22,6 +23,7 @@ impl CalError {
 		self.kind
 	}
 
+	/// Return a [CalError] with kind `Config`.
 	pub fn config_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Config,
@@ -29,6 +31,7 @@ impl CalError {
 		}
 	}
 
+	/// Return a [CalError] with kind `Network`.
 	pub fn net_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Network,
@@ -36,9 +39,18 @@ impl CalError {
 		}
 	}
 
+	/// Return a [CalError] with kind `Other`.
 	pub fn other_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Other,
+			data: msg.into(),
+		}
+	}
+
+	/// Return a [CalError] with kind `Topic`.
+	pub fn topic_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Topic,
 			data: msg.into(),
 		}
 	}
