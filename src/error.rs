@@ -28,6 +28,20 @@ impl CalError {
 			data: msg.into(),
 		}
 	}
+
+	pub fn net_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Network,
+			data: msg.into(),
+		}
+	}
+
+	pub fn other_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Other,
+			data: msg.into(),
+		}
+	}
 }
 impl Error for CalError {}
 impl fmt::Debug for CalError {
