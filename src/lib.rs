@@ -55,6 +55,7 @@ impl<T: Fn(AsbConnStatus) + Send + Sync> AsbStatusListener for T {}
 
 /// Abstract Service Bus.
 pub struct Asb {
+	config: AsbConfig,
 	system_uuid: Uuid,
 	service_uuid: Uuid,
 	/// The current status as an integer representing a variant of [AsbConnStatus].
@@ -67,7 +68,7 @@ pub struct Asb {
 }
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
-	pub fn new(service_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
+	pub fn new(service_name: &str, config: AsbConfig) -> Result<Self, CalError> {
 		let Some(service_config) = config.services.get(service_name) else {
 			return Err(CalError::config_err(format!(
 				"Missing service config for {service_name}"
@@ -81,14 +82,15 @@ impl Asb {
 			None => Uuid::new_v4(),
 		};
 
-		// TODO: Launch background thread for all async and receiving stuff.
+		let connection = AsbConnection::connect(&service_config.network, &config)?;
 
 		Ok(Asb {
+			config,
 			system_uuid,
 			service_uuid,
 			status: AtomicUsize::default(),
 			status_listeners: RwLock::new(Vec::new()),
-			connection: AsbConnection::connect(&service_config.network, config)?,
+			connection,
 		})
 	}
 
@@ -249,7 +251,7 @@ mod test {
 			services,
 		};
 
-		Asb::new("my_service", &config).unwrap()
+		Asb::new("my_service", config).unwrap()
 	}
 
 	/// Test that a status listener is correctly called for each status.
