@@ -9,7 +9,7 @@ use crate::{
 };
 use amqp::open_args_for_net;
 use amqprs::{
-	callbacks::DefaultConnectionCallback,
+	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
 	channel::{BasicConsumeArguments, QueueDeclareArguments},
 	connection::Connection,
 };
@@ -27,19 +27,22 @@ impl AsbConnection {
 			)));
 		};
 
-		// TODO:
-		let rt = tokio::runtime::Builder::new_current_thread()
-			.enable_all()
-			.build()?;
-		let handle = rt.handle().clone();
-
-		let res = match network.kind {
+		match network.kind {
 			NetworkKind::Amqp => {
+				// Create current thread flavor runtime for now.
+				// TODO: Consider feature or config to choose runtime flavor.
+				let rt = tokio::runtime::Builder::new_current_thread()
+					.enable_all()
+					.build()?;
+				let handle = rt.handle().clone();
+
+				// Open the connection and create a single channel for everything.
 				let open_args = open_args_for_net(&network)?;
 				let a = rt.block_on(async {
 					let conn = Connection::open(&open_args).await?;
 					conn.register_callback(DefaultConnectionCallback).await?;
 					let chan = conn.open_channel(None).await?;
+					chan.register_callback(DefaultChannelCallback).await?;
 
 					// TODO: If config has exchange name, create direct exchange.
 
@@ -48,17 +51,14 @@ impl AsbConnection {
 					Ok::<_, amqprs::error::Error>(a)
 				})?;
 
-				AsbConnection::Amqp(handle, a)
+				// Spawn background thread to drive the tokio runtime.
+				// TODO: Refactor `AsbConnection` to struct so store things like this easier.
+				let joiner = std::thread::spawn(move || rt.block_on(async { loop {} }));
+
+				Ok(AsbConnection::Amqp(handle, a))
 			}
-			NetworkKind::Null => AsbConnection::Null,
-		};
-
-		// Background thread for this connection that drives the tokio runtime.
-		// Spawned after res to ensure connections have succeeded
-		// TODO: Refactor `AsbConnection` to struct so store things like this easier.
-		let joiner = std::thread::spawn(move || rt.block_on(async { loop {} }));
-
-		Ok(res)
+			NetworkKind::Null => Ok(AsbConnection::Null),
+		}
 	}
 
 	pub fn create_reader<T>(
@@ -90,7 +90,7 @@ impl AsbConnection {
 					// TODO: Bind queue to exchange if necessary
 
 					// Create consumer for topic (subscribe).
-					//a.chan.basic_consume(consumer, consume_args).await?;
+					//let tag = a.chan.basic_consume(consumer, consume_args).await?;
 
 					Ok::<_, amqprs::error::Error>(())
 				})?;
