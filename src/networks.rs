@@ -55,7 +55,14 @@ impl AsbConnection {
 
 				// Spawn background thread to drive the tokio runtime.
 				// TODO: Refactor `AsbConnection` to struct so store things like this easier.
-				let joiner = std::thread::spawn(move || rt.block_on(async { loop {} }));
+				let joiner = std::thread::spawn(move || {
+					rt.block_on(async {
+						// Infinitely yield
+						loop {
+							tokio::task::yield_now().await
+						}
+					})
+				});
 
 				Ok(AsbConnection::Amqp(handle, a))
 			}
