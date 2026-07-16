@@ -196,18 +196,45 @@ impl Default for QosSettings {
 /// CAL topic. A combination of name, QoS, and a message type.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Topic<T> {
-	pub name: String,
+	name: String,
 	pub qos: QosSettings,
 	message_type: PhantomData<T>,
 }
 // TODO: Restrict T to be a valid type for sending (minimum serde, possibly specific message trait)
 impl<T> Topic<T> {
-	pub fn new(name: String, qos: QosSettings) -> Self {
-		Topic {
-			name,
+	pub fn new(name: &str, qos: QosSettings) -> Result<Self, CalError> {
+		// Restrict topic names to ASCII alphanumeric to minimize potential issues with ASB transports.
+		if name.contains(|c: char| !c.is_ascii_alphanumeric()) {
+			return Err(CalError::topic_err(format!(
+				"Topic \"{name}\" contains non-alphanumeric characters."
+			)));
+		}
+
+		Ok(Topic {
+			name: name.to_string(),
 			qos,
 			message_type: PhantomData,
+		})
+	}
+
+	/// Return current name as [str].
+	pub fn name(&self) -> &str {
+		&self.name
+	}
+
+	/// Set a new name for this topic. If `new_name` is invalid, then this topic is not modified.
+	pub fn set_name(&mut self, new_name: &str) -> Result<(), CalError> {
+		if new_name.contains(|c: char| !c.is_ascii_alphanumeric()) {
+			return Err(CalError::topic_err(format!(
+				"Topic \"{new_name}\" contains non-alphanumeric characters."
+			)));
 		}
+
+		// Reuse string.
+		self.name.clear();
+		self.name.push_str(new_name);
+
+		Ok(())
 	}
 }
 
