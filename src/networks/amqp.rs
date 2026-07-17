@@ -1,13 +1,18 @@
 //! AMQPRS related utilities
 
 use crate::{
-	config::{NetworkConfig, NetworkKind},
+	config::{NetworkConfig, NetworkKind, WireFormat},
 	error::CalError,
 };
 use amqprs::{
+	BasicProperties, Deliver,
 	channel::Channel,
 	connection::{Connection, OpenConnectionArguments},
+	consumer::AsyncConsumer,
 };
+use async_trait::async_trait;
+use ringbuf::{SharedRb, storage::Heap};
+use std::sync::Arc;
 use toml::Value;
 
 /// Get the necessary config params to create AMQP connection for `net_name`.
@@ -51,4 +56,18 @@ pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArgume
 pub struct AmqpAsb {
 	pub conn: Connection,
 	pub chan: Channel,
+}
+
+pub struct AmqpConsumer<T> {
+	format: WireFormat,
+	buffer: ringbuf::CachingCons<Arc<SharedRb<Heap<T>>>>,
+}
+
+#[async_trait]
+impl<T: Send> AsyncConsumer for AmqpConsumer<T> {
+	async fn consume(&mut self, _: &Channel, _: Deliver, _: BasicProperties, data: Vec<u8>) {
+		// Deserialize message
+
+		// Add to ring buffer
+	}
 }
