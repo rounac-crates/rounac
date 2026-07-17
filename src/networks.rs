@@ -4,27 +4,38 @@ pub mod amqp;
 
 use crate::{
 	Topic,
-	config::{
-		AsbConfig,
-		NetworkKind::{self, Amqp},
-		WireFormat,
-	},
+	config::{AsbConfig, NetworkKind, WireFormat},
 	error::CalError,
 };
 use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
 	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
-	channel::{BasicCancelArguments, BasicConsumeArguments, Channel, QueueDeclareArguments},
+	channel::{BasicCancelArguments, BasicConsumeArguments, QueueDeclareArguments},
 	connection::Connection,
 };
-use ringbuf::{SharedRb, traits::Split};
+use ringbuf::traits::{Consumer, Split};
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
+// TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
 pub enum AsbConnection {
 	Amqp(Handle, Arc<amqp::AmqpAsb>),
 	Null,
+}
+impl Drop for AsbConnection {
+	fn drop(&mut self) {
+		match self {
+			AsbConnection::Amqp(rt, asb) => {
+				rt.block_on(async {
+					// Close channel and connection, then join background thread.
+					_ = asb.chan.clone().close();
+					_ = asb.conn.clone().close();
+				});
+			}
+			_ => {}
+		};
+	}
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -59,12 +70,17 @@ impl AsbConnection {
 				})?;
 
 				// Spawn background thread to drive the tokio runtime.
-				// TODO: Refactor `AsbConnection` to struct so store things like this easier.
-				let joiner = std::thread::spawn(move || {
+				let channel_clone = a.chan.clone();
+				std::thread::spawn(move || {
 					rt.block_on(async {
-						// Infinitely yield
-						loop {
-							tokio::task::yield_now().await
+						// Yield while channel is still active.
+						while channel_clone.is_open() {
+							// Yield a few times before re-checking channel to avoid saturation.
+							// TODO: Tune number to see what effect it has.
+							// NOTE: Perhaps a time-based condition would be better.
+							for _ in 0..20 {
+								tokio::task::yield_now().await;
+							}
 						}
 					})
 				});
@@ -117,9 +133,7 @@ impl AsbConnection {
 					Ok::<_, amqprs::error::Error>(tag)
 				})?;
 
-				let a = AsbReader::Amqp(rt.clone(), tag, a.clone(), cons);
-
-				Err(CalError::other_err("Not implemented".to_string()))
+				Ok(AsbReader::Amqp(rt.clone(), tag, a.clone(), cons))
 			}
 			AsbConnection::Null => Ok(AsbReader::Null),
 		}
@@ -138,6 +152,15 @@ impl<T> Drop for AsbReader<T> {
 				_ = rt.block_on(a.chan.basic_cancel(cancel));
 			}
 			AsbReader::Null => {}
+		}
+	}
+}
+impl<T> AsbReader<T> {
+	/// Read the next message from the buffer.
+	pub fn read(&mut self) -> Option<T> {
+		match self {
+			AsbReader::Amqp(_, _, _, buf) => buf.try_pop(),
+			AsbReader::Null => None,
 		}
 	}
 }
