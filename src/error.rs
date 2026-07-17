@@ -54,6 +54,14 @@ impl CalError {
 		}
 	}
 
+	/// Return a [CalError] with kind `Other`.
+	pub fn serde_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Serde,
+			data: msg.into(),
+		}
+	}
+
 	/// Return a [CalError] with kind `Topic`.
 	pub fn topic_err(msg: String) -> Self {
 		CalError {
