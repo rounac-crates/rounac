@@ -50,6 +50,22 @@ impl FromStr for NetworkKind {
 	}
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum WireFormat {
+	Xml,
+}
+impl FromStr for WireFormat {
+	type Err = &'static str;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s.to_lowercase().as_str() {
+			"xml" => Ok(WireFormat::Xml),
+			_ => Err("unrecognized wire format"),
+		}
+	}
+}
+
 #[cfg(test)]
 mod test {
 	use super::*;
