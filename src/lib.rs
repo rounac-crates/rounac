@@ -11,7 +11,8 @@ mod msg_serde;
 mod networks;
 
 pub use crate::error::{CalError, CalErrorKind};
-use crate::networks::{AsbConnection, AsbReader, AsbWriter};
+use crate::networks::AsbConnection;
+pub use crate::networks::{AsbReader, AsbWriter};
 
 use config::AsbConfig;
 use serde::{Deserialize, Serialize};
