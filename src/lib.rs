@@ -14,6 +14,7 @@ pub use crate::error::{CalError, CalErrorKind};
 use crate::networks::AsbConnection;
 
 use config::AsbConfig;
+use serde::{Deserialize, Serialize};
 use std::{
 	default::Default,
 	marker::PhantomData,
@@ -157,9 +158,21 @@ impl Asb {
 		self.service_uuid
 	}
 
-	/// Create a new [AsbReader] for the given [Topic]
-	pub fn new_reader<T>(&self, topic: Topic<T>) -> Result<AsbReader<T>, CalError> {
-		Ok(AsbReader { topic })
+	/// Create a new [AsbReader] for the given [Topic].
+	pub fn new_reader<T: for<'de> Deserialize<'de> + Send + 'static>(
+		&self,
+		topic: &Topic<T>,
+	) -> Result<AsbReader<T>, CalError> {
+		Ok(AsbReader(
+			self.connection.create_reader(topic, &self.config)?,
+		))
+	}
+
+	/// Create a new [AsbWriter] for the given [Topic].
+	pub fn new_writer<T: Serialize>(&self, topic: &Topic<T>) -> Result<AsbWriter<T>, CalError> {
+		Ok(AsbWriter(
+			self.connection.create_writer(topic, &self.config)?,
+		))
 	}
 }
 
@@ -239,13 +252,9 @@ impl<T> Topic<T> {
 	}
 }
 
-pub struct AsbReader<T> {
-	topic: Topic<T>,
-}
+pub struct AsbReader<T>(networks::AsbReader<T>);
 
-pub struct AsbWriter<T> {
-	topic: Topic<T>,
-}
+pub struct AsbWriter<T>(networks::AsbWriter<T>);
 
 #[cfg(test)]
 mod test {
