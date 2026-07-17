@@ -4,21 +4,26 @@ pub mod amqp;
 
 use crate::{
 	Topic,
-	config::{AsbConfig, NetworkKind},
+	config::{
+		AsbConfig,
+		NetworkKind::{self, Amqp},
+		WireFormat,
+	},
 	error::CalError,
 };
-use amqp::open_args_for_net;
+use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
 	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
-	channel::{BasicConsumeArguments, QueueDeclareArguments},
+	channel::{BasicCancelArguments, BasicConsumeArguments, Channel, QueueDeclareArguments},
 	connection::Connection,
 };
-use ringbuf::{SharedRb, storage::Heap, traits::Split};
+use ringbuf::{SharedRb, traits::Split};
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime};
 
 pub enum AsbConnection {
-	Amqp(Handle, amqp::AmqpAsb),
+	Amqp(Handle, Arc<amqp::AmqpAsb>),
 	Null,
 }
 impl AsbConnection {
@@ -64,13 +69,13 @@ impl AsbConnection {
 					})
 				});
 
-				Ok(AsbConnection::Amqp(handle, a))
+				Ok(AsbConnection::Amqp(handle, Arc::new(a)))
 			}
 			NetworkKind::Null => Ok(AsbConnection::Null),
 		}
 	}
 
-	pub fn create_reader<T>(
+	pub fn create_reader<T: for<'de> Deserialize<'de> + Send + 'static>(
 		&self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
@@ -94,20 +99,25 @@ impl AsbConnection {
 
 				// Create a ring buffer and split into producer and consumer.
 				let (prod, cons) = ringbuf::HeapRb::<T>::new(topic.qos.buffer).split();
+				let consumer = AmqpConsumer {
+					// TODO: Fetch from config.
+					format: WireFormat::Xml,
+					buffer: prod,
+				};
 
-				rt.block_on(async {
+				let tag = rt.block_on(async {
 					// Declare queue
 					a.chan.queue_declare(declare_args).await?;
 
 					// TODO: Bind queue to exchange if necessary
 
 					// Create consumer for topic (subscribe).
-					//let tag = a.chan.basic_consume(consumer, consume_args).await?;
+					let tag = a.chan.basic_consume(consumer, consume_args).await?;
 
-					Ok::<_, amqprs::error::Error>(())
+					Ok::<_, amqprs::error::Error>(tag)
 				})?;
 
-				let a = AsbReader::Amqp(cons);
+				let a = AsbReader::Amqp(rt.clone(), tag, a.clone(), cons);
 
 				Err(CalError::other_err("Not implemented".to_string()))
 			}
@@ -117,8 +127,19 @@ impl AsbConnection {
 }
 
 pub enum AsbReader<T> {
-	Amqp(ringbuf::CachingCons<Arc<SharedRb<Heap<T>>>>),
+	Amqp(Handle, String, Arc<amqp::AmqpAsb>, ringbuf::HeapCons<T>),
 	Null,
+}
+impl<T> Drop for AsbReader<T> {
+	fn drop(&mut self) {
+		match self {
+			AsbReader::Amqp(rt, tag, a, _) => {
+				let cancel = BasicCancelArguments::new(tag);
+				_ = rt.block_on(a.chan.basic_cancel(cancel));
+			}
+			AsbReader::Null => {}
+		}
+	}
 }
 
 pub enum AsbWriter {}
