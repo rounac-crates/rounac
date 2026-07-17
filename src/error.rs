@@ -101,4 +101,7 @@ macro_rules! calerror_conversions {
 calerror_conversions! {
 	io::Error => CalErrorKind::Io
 	amqprs::error::Error => CalErrorKind::Network
+	quick_xml::errors::Error => CalErrorKind::Serde
+	quick_xml::errors::serialize::DeError => CalErrorKind::Serde
+	quick_xml::errors::serialize::SeError => CalErrorKind::Serde
 }
