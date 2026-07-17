@@ -8,10 +8,17 @@ use std::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CalErrorKind {
+	/// Error pertaining to the ASB configuration.
 	Config,
+	/// Wrapped [std::io::Error].
 	Io,
+	/// Error pertaining to a network connection.
 	Network,
+	/// Error pertaining to (de)serialization of a message.
+	Serde,
+	/// Error pertaining to [Topic].
 	Topic,
+	/// An error not covered by another category.
 	Other,
 }
 pub struct CalError {
