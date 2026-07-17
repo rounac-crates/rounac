@@ -65,6 +65,7 @@ impl AsbConnection {
 					conn.register_callback(DefaultConnectionCallback).await?;
 					let chan = conn.open_channel(None).await?;
 					chan.register_callback(DefaultChannelCallback).await?;
+					chan.flow(true).await?; // Kickstart traffic flowing
 
 					// TODO: If config has exchange name, create direct exchange.
 
