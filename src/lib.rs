@@ -11,7 +11,7 @@ mod msg_serde;
 mod networks;
 
 pub use crate::error::{CalError, CalErrorKind};
-use crate::networks::AsbConnection;
+use crate::networks::{AsbConnection, AsbReader, AsbWriter};
 
 use config::AsbConfig;
 use serde::{Deserialize, Serialize};
@@ -163,16 +163,12 @@ impl Asb {
 		&self,
 		topic: &Topic<T>,
 	) -> Result<AsbReader<T>, CalError> {
-		Ok(AsbReader(
-			self.connection.create_reader(topic, &self.config)?,
-		))
+		Ok(self.connection.create_reader(topic, &self.config)?)
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
 	pub fn new_writer<T: Serialize>(&self, topic: &Topic<T>) -> Result<AsbWriter<T>, CalError> {
-		Ok(AsbWriter(
-			self.connection.create_writer(topic, &self.config)?,
-		))
+		Ok(self.connection.create_writer(topic, &self.config)?)
 	}
 }
 
@@ -251,10 +247,6 @@ impl<T> Topic<T> {
 		Ok(())
 	}
 }
-
-pub struct AsbReader<T>(networks::AsbReader<T>);
-
-pub struct AsbWriter<T>(networks::AsbWriter<T>);
 
 #[cfg(test)]
 mod test {
