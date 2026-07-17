@@ -9,15 +9,19 @@ use crate::{
 };
 use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
+	BasicProperties,
 	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
-	channel::{BasicCancelArguments, BasicConsumeArguments, QueueDeclareArguments},
+	channel::{
+		BasicCancelArguments, BasicConsumeArguments, BasicPublishArguments, QueueDeclareArguments,
+	},
 	connection::Connection,
 };
 use ringbuf::traits::{Consumer, Split};
-use serde::Deserialize;
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use std::{marker::PhantomData, sync::Arc};
 use tokio::runtime::Handle;
 
+/// Manages the transport-specific data and lifetime.
 // TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
 pub enum AsbConnection {
 	Amqp(Handle, Arc<amqp::AmqpAsb>),
@@ -138,8 +142,36 @@ impl AsbConnection {
 			AsbConnection::Null => Ok(AsbReader::Null),
 		}
 	}
+
+	pub fn create_writer<T>(
+		&self,
+		topic: &Topic<T>,
+		config: &AsbConfig,
+	) -> Result<AsbWriter<T>, CalError> {
+		match self {
+			AsbConnection::Amqp(rt, asb) => {
+				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
+				let topic_name = topic.name.clone();
+
+				// Create the publish parameters
+				let props = BasicProperties::default();
+				let args = BasicPublishArguments::new("", &topic_name);
+
+				Ok(AsbWriter::Amqp(
+					rt.clone(),
+					asb.clone(),
+					WireFormat::Xml,
+					props,
+					args,
+					PhantomData,
+				))
+			}
+			AsbConnection::Null => Ok(AsbWriter::Null),
+		}
+	}
 }
 
+/// Provides messages received from the ASB through a polling interface.
 pub enum AsbReader<T> {
 	Amqp(Handle, String, Arc<amqp::AmqpAsb>, ringbuf::HeapCons<T>),
 	Null,
@@ -165,4 +197,29 @@ impl<T> AsbReader<T> {
 	}
 }
 
-pub enum AsbWriter {}
+/// Publishes messages to the ASB on the topic specified during construction.
+// TODO: Refactor to shrink tuple size and/or convert to struct with common
+//       elements like `Handle` and `WireFormat`.
+pub enum AsbWriter<T> {
+	Amqp(
+		Handle,
+		Arc<amqp::AmqpAsb>,
+		WireFormat,
+		BasicProperties,
+		BasicPublishArguments,
+		PhantomData<T>,
+	),
+	Null,
+}
+impl<T: Serialize> AsbWriter<T> {
+	pub fn write(&self, msg: &T) -> Result<(), CalError> {
+		match self {
+			AsbWriter::Amqp(rt, asb, format, props, args, _) => {
+				let data = crate::msg_serde::serialize_msg(format, msg)?;
+
+				Ok(rt.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?)
+			}
+			AsbWriter::Null => Ok(()),
+		}
+	}
+}
