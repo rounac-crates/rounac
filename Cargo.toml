@@ -21,6 +21,10 @@ tokio = { version = "1.52.3", features = ["rt"] }
 toml = { version = "1.1.2", features = ["serde"] }
 uuid = { version = "1.23.4", features = ["serde", "v4"] }
 
+[[example]]
+name = "basic_status_publish"
+required-features = ["uci-2_5"]
+
 [features]
 agra-5_0 = ["rounac-agra/v5_0"]
 uci-2_5 = ["rounac-uci/v2_5"]
