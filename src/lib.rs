@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod error;
+mod msg_serde;
 mod networks;
 
 pub use crate::error::{CalError, CalErrorKind};
