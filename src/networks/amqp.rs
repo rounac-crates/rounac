@@ -11,8 +11,8 @@ use amqprs::{
 	consumer::AsyncConsumer,
 };
 use async_trait::async_trait;
-use ringbuf::{SharedRb, storage::Heap};
-use std::sync::Arc;
+use ringbuf::traits::Producer;
+use serde::Deserialize;
 use toml::Value;
 
 /// Get the necessary config params to create AMQP connection for `net_name`.
@@ -59,15 +59,18 @@ pub struct AmqpAsb {
 }
 
 pub struct AmqpConsumer<T> {
-	format: WireFormat,
-	buffer: ringbuf::CachingCons<Arc<SharedRb<Heap<T>>>>,
+	pub format: WireFormat,
+	pub buffer: ringbuf::HeapProd<T>,
 }
 
 #[async_trait]
-impl<T: Send> AsyncConsumer for AmqpConsumer<T> {
+impl<T: for<'de> Deserialize<'de> + Send> AsyncConsumer for AmqpConsumer<T> {
 	async fn consume(&mut self, _: &Channel, _: Deliver, _: BasicProperties, data: Vec<u8>) {
 		// Deserialize message
-
-		// Add to ring buffer
+		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
+			// Add to ring buffer
+			// TODO: Make custom ring buffer that allows producer to overwrite SYNCHRONOUSLY.
+			_ = self.buffer.try_push(msg);
+		}
 	}
 }
