@@ -3,13 +3,20 @@
 //! This example will demonstrate basic publishing using a `ServiceStatus`
 //! message over an AMQP (RabbitMQ) network.
 
+use chrono::TimeDelta;
 use rounac::{Asb, QosSettings, Topic};
 use rounac_uci::v2_5::{
 	choices::OwnerProducerChoiceType,
-	enums::{ClassificationEnum, OwnerProducerEnum},
-	types::SecurityInformationType,
+	elements::ServiceStatus,
+	enums::{ClassificationEnum, MessageModeEnum, OwnerProducerEnum, ServiceStateEnum},
+	types::{
+		HeaderType, SecurityInformationType, ServiceIdType, ServiceStatusMdt, ServiceStatusMt,
+		SystemIdType,
+	},
 };
+use std::time::{Duration, Instant};
 
+// Simple configuration that will utilize the `amqp` network type.
 const CONFIG: &str = r#"
 system_uuid = "00000000-0000-0000-0000-000000000000"
 
@@ -25,9 +32,10 @@ username = "guest"
 password = "guest"
 "#;
 
-fn security_info(classification: ClassificationEnum) -> SecurityInformationType {
+/// Returns empty security information for an unclassified USA producer.
+fn security_info() -> SecurityInformationType {
 	SecurityInformationType {
-		classification,
+		classification: ClassificationEnum::U,
 		owner_producer: vec![OwnerProducerChoiceType::GovernmentIdentifier(
 			OwnerProducerEnum::Usa,
 		)],
@@ -64,11 +72,81 @@ fn security_info(classification: ClassificationEnum) -> SecurityInformationType 
 	}
 }
 
-//fn make_status()
+/// Returns a message header for the given parameters.
+fn header(
+	schema_version: String,
+	system_id: SystemIdType,
+	service_id: ServiceIdType,
+) -> HeaderType {
+	HeaderType {
+		system_id,
+		timestamp: chrono::Utc::now(),
+		schema_version,
+		mode: MessageModeEnum::NonexerciseSimulation,
+		service_id: Some(service_id),
+		mission_id: None,
+	}
+}
+
+/// Returns a service status for `service_id` with 0 uptime and normal state.
+fn service_status_mdt(service_id: ServiceIdType) -> ServiceStatusMdt {
+	ServiceStatusMdt {
+		service_id,
+		time_up: chrono::TimeDelta::seconds(0).into(),
+		service_state: ServiceStateEnum::Normal,
+		service_state_reason: Vec::new(),
+		predicted_service_state: Vec::new(),
+		enabled_settings: Vec::new(),
+		supported_settings: Vec::new(),
+	}
+}
 
 fn main() {
+	// Load the configuration and create the ASB + writer.
 	let config = CONFIG.parse().unwrap();
 	let asb = Asb::new("basic_publish", config).unwrap();
-	let topic = Topic::new("status", QosSettings::default()).unwrap();
+	let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
 	let writer = asb.new_writer(&topic).unwrap();
+
+	// Get the UCI schema version.
+	let schema_ver = rounac_uci::v2_5::SCHEMA_VERSION.to_owned();
+
+	// Make system ID with the UUID from the config.
+	let system_id = SystemIdType {
+		uuid: asb.get_system_uuid(),
+		// System name can be whatever.
+		descriptive_label: Some("My System".to_owned()),
+	};
+
+	// Make service ID with the UUID from the config.
+	let service_id = ServiceIdType {
+		uuid: asb.get_service_uuid(),
+		// Matching this example name for clarity, but this is not necessary.
+		descriptive_label: Some("basic_status_publish".to_owned()),
+		// Use crate version (if there is one) for simplicity.
+		service_version: option_env!("CARGO_PKG_VERSION").map(|v| v.to_string().into()),
+	};
+
+	// Make the status message.
+	let mut status = ServiceStatus(ServiceStatusMt {
+		security_information: security_info(),
+		message_header: header(schema_ver, system_id, service_id.clone()),
+		message_data: service_status_mdt(service_id.clone()),
+	});
+
+	// Loop and send a few status messages.
+	let start = Instant::now();
+	for _ in 0..5 {
+		// Indicate to user we're sending status now, and warn if it failed to send.
+		println!("Sending status message..");
+		if let Err(e) = writer.write(&status) {
+			eprintln!("Failed to send status: {e}");
+		}
+
+		// Update service uptime.
+		status.message_data.time_up = TimeDelta::from_std(start.elapsed()).unwrap().into();
+
+		// Sleep to avoid flooding.
+		std::thread::sleep(Duration::from_secs(2));
+	}
 }
