@@ -33,8 +33,8 @@ impl Drop for AsbConnection {
 			AsbConnection::Amqp(rt, asb) => {
 				rt.block_on(async {
 					// Close channel and connection, then join background thread.
-					_ = asb.chan.clone().close();
-					_ = asb.conn.clone().close();
+					_ = asb.chan.clone().close().await;
+					_ = asb.conn.clone().close().await;
 				});
 			}
 			_ => {}
@@ -75,11 +75,12 @@ impl AsbConnection {
 				})?;
 
 				// Spawn background thread to drive the tokio runtime.
-				let channel_clone = a.chan.clone();
+				let conn_clone = a.conn.clone();
 				std::thread::spawn(move || {
 					rt.block_on(async {
-						// Yield while channel is still active.
-						while channel_clone.is_open() {
+						// Yield while connection is still active.
+						// Connection gets dropped last so tokio runtime must live beyond that.
+						while conn_clone.is_open() {
 							// Yield a few times before re-checking channel to avoid saturation.
 							// TODO: Tune number to see what effect it has.
 							// NOTE: Perhaps a time-based condition would be better.
