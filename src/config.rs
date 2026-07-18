@@ -34,20 +34,12 @@ pub struct NetworkConfig {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum NetworkKind {
+	/// AMQP 0-9-1
+	#[serde(rename = "amqp", alias = "AMQP")]
 	Amqp,
 	/// The lack of any network. Useful for testing or quick config changes.
+	#[serde(rename = "null", alias = "NULL")]
 	Null,
-}
-impl FromStr for NetworkKind {
-	type Err = &'static str;
-
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		match s.to_lowercase().as_str() {
-			"amqp" => Ok(NetworkKind::Amqp),
-			"null" => Ok(NetworkKind::Null),
-			_ => Err("unrecognized network kind"),
-		}
-	}
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
