@@ -24,6 +24,7 @@ impl FromStr for AsbConfig {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ServicesConfig {
 	pub(crate) default_network: Option<String>,
+	pub(crate) default_wire_format: Option<WireFormat>,
 	#[serde(flatten)]
 	pub(crate) service: HashMap<String, ServiceConfig>,
 }
@@ -33,6 +34,7 @@ pub struct ServicesConfig {
 pub struct ServiceConfig {
 	pub(crate) service_uuid: Option<Uuid>,
 	pub(crate) network: Option<String>,
+	pub(crate) wire_format: Option<WireFormat>,
 }
 
 /// Configuration of a single network.
@@ -86,6 +88,7 @@ mod test {
 		[services.my_service]
 		service_uuid = "00000000-0000-4000-8000-0123456789AB"
 		network = "null"
+		wire_format = "xml"
 
 		[networks]
 		"#;
@@ -96,12 +99,14 @@ mod test {
 			ServiceConfig {
 				service_uuid: Some(uuid::uuid!("00000000-0000-4000-8000-0123456789AB")),
 				network: Some("null".to_string()),
+				wire_format: Some(WireFormat::Xml),
 			},
 		);
 		let expected = AsbConfig {
 			system_uuid: Some(Uuid::nil()),
 			services: ServicesConfig {
 				default_network: None,
+				default_wire_format: None,
 				service: services,
 			},
 			networks: HashMap::new(),

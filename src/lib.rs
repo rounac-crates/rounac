@@ -260,7 +260,7 @@ impl<T> Topic<T> {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::config::{NetworkConfig, NetworkKind, ServiceConfig, ServicesConfig};
+	use crate::config::{NetworkConfig, NetworkKind, ServiceConfig, ServicesConfig, WireFormat};
 	use std::collections::HashMap;
 	use toml::Table;
 
@@ -280,11 +280,13 @@ mod test {
 			ServiceConfig {
 				service_uuid: None,
 				network: Some("null".to_string()),
+				wire_format: Some(WireFormat::Xml),
 			},
 		);
 
 		let all_services = ServicesConfig {
 			default_network: None,
+			default_wire_format: None,
 			service: services,
 		};
 
