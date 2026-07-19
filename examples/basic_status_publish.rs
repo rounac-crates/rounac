@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 const CONFIG: &str = r#"
 system_uuid = "00000000-0000-0000-0000-000000000000"
 
-[services.basic_publish]
+[services.basic_status_publish]
 service_uuid = "00000000-0000-4000-8000-0123456789AB"
 network = "rabbit"
 
@@ -102,9 +102,12 @@ fn service_status_mdt(service_id: ServiceIdType) -> ServiceStatusMdt {
 }
 
 fn main() {
+	// This must match the service name in the config to apply the configuration.
+	const SVC_NAME: &str = "basic_status_publish";
+
 	// Load the configuration and create the ASB + writer.
 	let config = CONFIG.parse().unwrap();
-	let asb = Asb::new("basic_publish", config).unwrap();
+	let asb = Asb::new(SVC_NAME, config).unwrap();
 	let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
 	let writer = asb.new_writer(&topic).unwrap();
 
@@ -122,7 +125,7 @@ fn main() {
 	let service_id = ServiceIdType {
 		uuid: asb.get_service_uuid(),
 		// Matching this example name for clarity, but this is not necessary.
-		descriptive_label: Some("basic_status_publish".to_owned()),
+		descriptive_label: Some(SVC_NAME.to_owned()),
 		// Use crate version (if there is one) for simplicity.
 		service_version: option_env!("CARGO_PKG_VERSION").map(|v| v.to_string().into()),
 	};
