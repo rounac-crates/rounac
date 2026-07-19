@@ -45,6 +45,7 @@ pub enum NetworkKind {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum WireFormat {
+	#[serde(rename = "xml", alias = "XML")]
 	Xml,
 }
 impl FromStr for WireFormat {
@@ -91,5 +92,25 @@ mod test {
 
 		let parsed: AsbConfig = CONFIG.parse().unwrap();
 		assert_eq!(parsed, expected);
+	}
+
+	#[test]
+	fn deserialize_wire_format() {
+		#[derive(Debug, Deserialize, Serialize)]
+		struct TestConfig {
+			format: WireFormat,
+		}
+		const GOOD_CONFIG1: &str = r#"format = "xml""#;
+		const GOOD_CONFIG2: &str = r#"format = "XML""#;
+		const BAD_CONFIG1: &str = r#"format = "xMl""#;
+		const BAD_CONFIG2: &str = r#"format = "XmL""#;
+
+		// Test good deserialization
+		toml::from_str::<TestConfig>(GOOD_CONFIG1).unwrap();
+		toml::from_str::<TestConfig>(GOOD_CONFIG2).unwrap();
+
+		// Test bad serialization
+		toml::from_str::<TestConfig>(BAD_CONFIG1).unwrap_err();
+		toml::from_str::<TestConfig>(BAD_CONFIG2).unwrap_err();
 	}
 }
