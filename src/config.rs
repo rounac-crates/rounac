@@ -1,4 +1,43 @@
-//! Configuration related utilities.
+//! CAL configuration
+//!
+//! This CAL is configured using a TOML file, with a complete reference seen
+//! below.
+//!
+//! # Complete configuration reference:
+//! ```toml
+//! # Optional system UUID (random v4 if unspecified).
+//! system_uuid = "00000000-0000-0000-0000-000000000000"
+//!
+//! # Configurations that apply to all services.
+//! [services]
+//! # Optional default network for services.
+//! default_network = "rabbit"
+//! default_wire_format = "xml"
+//!
+//! # Configuration for "service1" service.
+//! [services.service1]
+//! # Optional service UUID (random v4 if unspecified).
+//! service_uuid = "00000000-0000-4000-8000-0123456789AB"
+//! # Optional if services.default_network exists, otherwise required.
+//! # Specifies the "networks" sub-table this service should use.
+//! network = "rabbitmq"
+//! # Optional if services.default_wire_format exists, otherwise required.
+//! wire_format = "xml"
+//!
+//! # Configuration for "rabbitmq" network.
+//! [networks.rabbitmq]
+//! # Required network kind, which defines remaining parameters.
+//! kind = "amqp"
+//! # AMQP-specific parameters
+//! host = "localhost"
+//! port = 5672
+//! username = "guest"
+//! password = "guest"
+//!
+//! # A null network always succeeds but does nothing.
+//! [networks.blackhole]
+//! kind = "null"
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
@@ -6,6 +45,10 @@ use toml::Table;
 use uuid::Uuid;
 
 /// Full ASB configuration.
+///
+/// # Usage
+/// This type implements [FromStr] so simply call `.parse()` on your config
+/// string. See the module documentation for the configuration format.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AsbConfig {
 	pub(crate) system_uuid: Option<Uuid>,
