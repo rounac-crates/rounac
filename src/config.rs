@@ -101,7 +101,7 @@ pub enum NetworkKind {
 }
 
 /// The specific format to be used when (de)serializing messages.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum WireFormat {
 	#[serde(rename = "xml", alias = "XML")]

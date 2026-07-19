@@ -59,6 +59,7 @@ impl<T: Fn(AsbConnStatus) + Send + Sync> AsbStatusListener for T {}
 /// Abstract Service Bus.
 pub struct Asb {
 	config: AsbConfig,
+	service_name: String,
 	system_uuid: Uuid,
 	service_uuid: Uuid,
 	/// The current status as an integer representing a variant of [AsbConnStatus].
@@ -97,6 +98,7 @@ impl Asb {
 
 		Ok(Asb {
 			config,
+			service_name: service_name.to_owned(),
 			system_uuid,
 			service_uuid,
 			status: AtomicUsize::default(),
@@ -172,12 +174,16 @@ impl Asb {
 		&self,
 		topic: &Topic<T>,
 	) -> Result<AsbReader<T>, CalError> {
-		Ok(self.connection.create_reader(topic, &self.config)?)
+		Ok(self
+			.connection
+			.create_reader(topic, &self.config, &self.service_name)?)
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
 	pub fn new_writer<T: Serialize>(&self, topic: &Topic<T>) -> Result<AsbWriter<T>, CalError> {
-		Ok(self.connection.create_writer(topic, &self.config)?)
+		Ok(self
+			.connection
+			.create_writer(topic, &self.config, &self.service_name)?)
 	}
 }
 

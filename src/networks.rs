@@ -101,7 +101,20 @@ impl AsbConnection {
 		&self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
+		svc_name: &str,
 	) -> Result<AsbReader<T>, CalError> {
+		// Check for the wire format first
+		let default_wire_format = config.services.default_wire_format.as_ref();
+		let wire_format = match config.services.service.get(svc_name) {
+			// If the service config has a wire format, use that.
+			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
+			// Otherwise try to use the default.
+			_ => default_wire_format.ok_or(CalError::config_err(format!(
+				"No wire format specified for topic {} under service {svc_name}.",
+				&topic.name
+			))),
+		}?;
+
 		match self {
 			AsbConnection::Amqp(rt, a) => {
 				// Create a queue for this topic
@@ -122,8 +135,7 @@ impl AsbConnection {
 				// Create a ring buffer and split into producer and consumer.
 				let (prod, cons) = ringbuf::HeapRb::<T>::new(topic.qos.buffer).split();
 				let consumer = AmqpConsumer {
-					// TODO: Fetch from config.
-					format: WireFormat::Xml,
+					format: *wire_format,
 					buffer: prod,
 				};
 
@@ -149,7 +161,20 @@ impl AsbConnection {
 		&self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
+		svc_name: &str,
 	) -> Result<AsbWriter<T>, CalError> {
+		// Check for the wire format first
+		let default_wire_format = config.services.default_wire_format.as_ref();
+		let wire_format = match config.services.service.get(svc_name) {
+			// If the service config has a wire format, use that.
+			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
+			// Otherwise try to use the default.
+			_ => default_wire_format.ok_or(CalError::config_err(format!(
+				"No wire format specified for topic {} under service {svc_name}.",
+				&topic.name
+			))),
+		}?;
+
 		match self {
 			AsbConnection::Amqp(rt, asb) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
@@ -162,7 +187,7 @@ impl AsbConnection {
 				Ok(AsbWriter::Amqp(
 					rt.clone(),
 					asb.clone(),
-					WireFormat::Xml,
+					*wire_format,
 					props,
 					args,
 					PhantomData,
