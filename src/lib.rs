@@ -72,7 +72,7 @@ pub struct Asb {
 impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
 	pub fn new(service_name: &str, config: AsbConfig) -> Result<Self, CalError> {
-		let Some(service_config) = config.services.get(service_name) else {
+		let Some(service_config) = config.services.service.get(service_name) else {
 			return Err(CalError::config_err(format!(
 				"Missing service config for {service_name}"
 			)));
@@ -85,7 +85,15 @@ impl Asb {
 			None => Uuid::new_v4(),
 		};
 
-		let connection = AsbConnection::connect(&service_config.network, &config)?;
+		// Get network from service config or the default
+		let default_network = config.services.default_network.as_ref();
+		let Some(network) = service_config.network.as_ref().or(default_network) else {
+			return Err(CalError::config_err(format!(
+				"Missing network config for service {service_name}"
+			)));
+		};
+
+		let connection = AsbConnection::connect(network, &config)?;
 
 		Ok(Asb {
 			config,
@@ -252,7 +260,7 @@ impl<T> Topic<T> {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::config::{NetworkConfig, NetworkKind, ServiceConfig};
+	use crate::config::{NetworkConfig, NetworkKind, ServiceConfig, ServicesConfig};
 	use std::collections::HashMap;
 	use toml::Table;
 
@@ -271,14 +279,19 @@ mod test {
 			"my_service".to_string(),
 			ServiceConfig {
 				service_uuid: None,
-				network: "null".to_string(),
+				network: Some("null".to_string()),
 			},
 		);
+
+		let all_services = ServicesConfig {
+			default_network: None,
+			service: services,
+		};
 
 		let config: AsbConfig = AsbConfig {
 			system_uuid: None,
 			networks,
-			services,
+			services: all_services,
 		};
 
 		Asb::new("my_service", config).unwrap()
