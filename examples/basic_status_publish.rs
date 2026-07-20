@@ -23,6 +23,7 @@ system_uuid = "00000000-0000-0000-0000-000000000000"
 [services.basic_status_publish]
 service_uuid = "00000000-0000-4000-8000-0123456789AB"
 network = "rabbit"
+wire_format = "xml"
 
 [networks.rabbit]
 kind = "amqp"
