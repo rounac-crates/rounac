@@ -11,7 +11,7 @@ use amqprs::{
 	consumer::AsyncConsumer,
 };
 use async_trait::async_trait;
-use ringbuf::traits::Producer;
+use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
 use toml::Value;
 
@@ -60,7 +60,7 @@ pub struct AmqpAsb {
 
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
-	pub buffer: ringbuf::HeapProd<T>,
+	pub buffer: RingSender<T>,
 }
 
 #[async_trait]
@@ -69,8 +69,7 @@ impl<T: for<'de> Deserialize<'de> + Send> AsyncConsumer for AmqpConsumer<T> {
 		// Deserialize message
 		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
 			// Add to ring buffer
-			// TODO: Make custom ring buffer that allows producer to overwrite SYNCHRONOUSLY.
-			_ = self.buffer.try_push(msg);
+			_ = self.buffer.send(msg);
 		}
 	}
 }

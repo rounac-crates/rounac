@@ -16,7 +16,7 @@ use amqprs::{
 	},
 	connection::Connection,
 };
-use ringbuf::traits::{Consumer, Split};
+use crossbeam_ring_channel::RingReceiver;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, sync::Arc};
 use tokio::runtime::Handle;
@@ -133,7 +133,7 @@ impl AsbConnection {
 				let consume_args = BasicConsumeArguments::new(&topic_name, "");
 
 				// Create a ring buffer and split into producer and consumer.
-				let (prod, cons) = ringbuf::HeapRb::<T>::new(topic.qos.buffer).split();
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer);
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffer: prod,
@@ -200,7 +200,7 @@ impl AsbConnection {
 
 /// Provides messages received from the ASB through a polling interface.
 pub enum AsbReader<T> {
-	Amqp(Handle, String, Arc<amqp::AmqpAsb>, ringbuf::HeapCons<T>),
+	Amqp(Handle, String, Arc<amqp::AmqpAsb>, RingReceiver<T>),
 	Null,
 }
 impl<T> Drop for AsbReader<T> {
@@ -218,7 +218,7 @@ impl<T> AsbReader<T> {
 	/// Read the next message from the buffer.
 	pub fn read(&mut self) -> Option<T> {
 		match self {
-			AsbReader::Amqp(_, _, _, buf) => buf.try_pop(),
+			AsbReader::Amqp(_, _, _, buf) => buf.try_recv().ok(),
 			AsbReader::Null => None,
 		}
 	}
