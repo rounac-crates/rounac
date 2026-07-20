@@ -128,8 +128,11 @@ impl AsbConnection {
 				let topic_name = topic.name.clone();
 
 				// Prepare arguments
-				// TODO: Check config for whether topic should be exclusive
-				let declare_args = QueueDeclareArguments::transient_autodelete(&topic_name);
+				// If `auto_delete`, also require `exclusive` since RabbitMQ hard errors otherwise.
+				let declare_args = QueueDeclareArguments::new(&topic_name)
+					.exclusive(true)
+					.auto_delete(true)
+					.finish();
 
 				// TODO: Create QueueBindArguments if exchange is used. Bind to default exchange is automatic from declaration.
 
