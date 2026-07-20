@@ -57,7 +57,7 @@ fn main() {
 			}
 		}
 
-		remaining = listen_time.saturating_sub(now);
 		now = start.elapsed();
+		remaining = listen_time.saturating_sub(now);
 	}
 }
