@@ -47,7 +47,7 @@ fn main() {
 		"Listening for status messages for {}s.",
 		listen_time.as_secs()
 	);
-	while now < remaining {
+	while !remaining.is_zero() {
 		if let Ok(Some(msg)) = reader.read_timeout(remaining) {
 			println!("Received status from {}!", msg.message_data.service_id.uuid);
 
@@ -56,6 +56,8 @@ fn main() {
 				eprintln!("Status has mismatched schema version!!");
 			}
 		}
+
+		remaining = listen_time.saturating_sub(now);
 		now = start.elapsed();
 	}
 }
