@@ -1,6 +1,6 @@
 [package]
 name = "rounac"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.96.0"
 description = "A Rust interpretation of the OMS CAL specification."
