@@ -11,6 +11,7 @@ license = "MIT or Apache-2.0"
 [dependencies]
 amqprs = "2.1.5"
 async-trait = "0.1.89"
+crossbeam-channel = "0.5.16"
 crossbeam-ring-channel = "0.1.0"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 rand = "0.10.2"

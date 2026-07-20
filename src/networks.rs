@@ -16,9 +16,15 @@ use amqprs::{
 	},
 	connection::Connection,
 };
+use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::RingReceiver;
 use serde::{Deserialize, Serialize};
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+	collections::HashMap,
+	marker::PhantomData,
+	sync::{Arc, Mutex},
+	time::Duration,
+};
 use tokio::runtime::Handle;
 
 /// Manages the transport-specific data and lifetime.
@@ -151,9 +157,24 @@ impl AsbConnection {
 					Ok::<_, amqprs::error::Error>(tag)
 				})?;
 
-				Ok(AsbReader::Amqp(rt.clone(), tag, a.clone(), cons))
+				Ok(AsbReader {
+					buffer: cons,
+					net: AsbReaderNet::Amqp(rt.clone(), tag, a.clone()),
+					callback_mode: false,
+					listeners: Mutex::new(HashMap::new()),
+				})
 			}
-			AsbConnection::Null => Ok(AsbReader::Null),
+			AsbConnection::Null => {
+				// Construct empty ring buffer since null does nothing.
+				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
+
+				Ok(AsbReader {
+					buffer: cons,
+					net: AsbReaderNet::Null,
+					callback_mode: false,
+					listeners: Mutex::new(HashMap::new()),
+				})
+			}
 		}
 	}
 
@@ -199,27 +220,61 @@ impl AsbConnection {
 }
 
 /// Provides messages received from the ASB through a polling interface.
-pub enum AsbReader<T> {
-	Amqp(Handle, String, Arc<amqp::AmqpAsb>, RingReceiver<T>),
-	Null,
+///
+/// **IMPORTANT**: If the network type is "null" then all read methods will error.
+pub struct AsbReader<T> {
+	buffer: RingReceiver<T>,
+	net: AsbReaderNet,
+	/// Whether this reader has registered listeners and should disallow `read()`.
+	// Option<JoinHandle<RingReceiver<T>>> - Pass RingReceiver back and forth, or just clone it.
+	callback_mode: bool,
+	/// All registered listeners keyed by a random number.
+	listeners: Mutex<HashMap<u32, Box<dyn Fn(&T) + Send + Sync>>>,
 }
-impl<T> Drop for AsbReader<T> {
-	fn drop(&mut self) {
-		match self {
-			AsbReader::Amqp(rt, tag, a, _) => {
-				let cancel = BasicCancelArguments::new(tag);
-				_ = rt.block_on(a.chan.basic_cancel(cancel));
-			}
-			AsbReader::Null => {}
+impl<T> AsbReader<T> {
+	/// Read the next message from the buffer or block until there is one.
+	pub fn read(&self) -> Result<T, CalError> {
+		self.buffer
+			.recv()
+			.map_err(|_| CalError::other_err("Reader error".to_string()))
+	}
+
+	/// Read the next message from the buffer or block until one is received or `timeout` is reached.
+	pub fn read_timeout(&self, timeout: Duration) -> Result<Option<T>, CalError> {
+		match self.buffer.recv_timeout(timeout) {
+			Ok(m) => Ok(Some(m)),
+			Err(e) => match e {
+				RecvTimeoutError::Timeout => Ok(None),
+				_ => Err(CalError::other_err("Reader error".to_string())),
+			},
+		}
+	}
+
+	/// Read the next message from the buffer if there is one. Does not block.
+	pub fn try_read(&self) -> Result<Option<T>, CalError> {
+		match self.buffer.try_recv() {
+			Ok(m) => Ok(Some(m)),
+			Err(e) => match e {
+				TryRecvError::Empty => Ok(None),
+				_ => Err(CalError::other_err("Reader error".to_string())),
+			},
 		}
 	}
 }
-impl<T> AsbReader<T> {
-	/// Read the next message from the buffer.
-	pub fn read(&mut self) -> Option<T> {
+
+/// Holds all network-specific data to manage the reader/subscriber.
+pub enum AsbReaderNet {
+	Amqp(Handle, String, Arc<amqp::AmqpAsb>),
+	Null,
+}
+impl Drop for AsbReaderNet {
+	fn drop(&mut self) {
 		match self {
-			AsbReader::Amqp(_, _, _, buf) => buf.try_recv().ok(),
-			AsbReader::Null => None,
+			AsbReaderNet::Amqp(rt, tag, a) => {
+				let cancel = BasicCancelArguments::new(tag);
+				_ = rt.block_on(a.chan.basic_cancel(cancel));
+			}
+			AsbReaderNet::Null => {}
 		}
 	}
 }
