@@ -37,7 +37,7 @@ impl Drop for AsbNetMode {
 		match self {
 			AsbNetMode::Amqp(asb) => {
 				asb.rt_handle.block_on(async {
-					// Close channel and connection, then join background thread.
+					// Close channel and connection.
 					_ = asb.chan.clone().close().await;
 					_ = asb.conn.clone().close().await;
 				});
