@@ -28,16 +28,14 @@ use std::{
 };
 
 /// Manages the transport-specific data and lifetime.
-// TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
-// TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
-pub enum AsbConnection {
+pub enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>),
 	Null,
 }
-impl Drop for AsbConnection {
+impl Drop for AsbNetMode {
 	fn drop(&mut self) {
 		match self {
-			AsbConnection::Amqp(asb) => {
+			AsbNetMode::Amqp(asb) => {
 				asb.rt_handle.block_on(async {
 					// Close channel and connection, then join background thread.
 					_ = asb.chan.clone().close().await;
@@ -47,6 +45,13 @@ impl Drop for AsbConnection {
 			_ => {}
 		};
 	}
+}
+
+/// Manages and maintains a single ASB connection.
+// TODO: Status var shared with background thread.
+// TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
+pub struct AsbConnection {
+	net: AsbNetMode,
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -118,14 +123,18 @@ impl AsbConnection {
 					})
 				});
 
-				Ok(AsbConnection::Amqp(Arc::new(amqp::AmqpAsb {
-					rt_handle,
-					conn,
-					chan,
-					exchange,
-				})))
+				Ok(AsbConnection {
+					net: AsbNetMode::Amqp(Arc::new(amqp::AmqpAsb {
+						rt_handle,
+						conn,
+						chan,
+						exchange,
+					})),
+				})
 			}
-			NetworkKind::Null => Ok(AsbConnection::Null),
+			NetworkKind::Null => Ok(AsbConnection {
+				net: AsbNetMode::Null,
+			}),
 		}
 	}
 
@@ -147,8 +156,8 @@ impl AsbConnection {
 			))),
 		}?;
 
-		match self {
-			AsbConnection::Amqp(asb) => {
+		match &self.net {
+			AsbNetMode::Amqp(asb) => {
 				// Create a queue for this topic
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
@@ -206,7 +215,7 @@ impl AsbConnection {
 					_asb: PhantomData,
 				})
 			}
-			AsbConnection::Null => {
+			AsbNetMode::Null => {
 				// Construct empty ring buffer since null does nothing.
 				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
 
@@ -239,8 +248,8 @@ impl AsbConnection {
 			))),
 		}?;
 
-		match self {
-			AsbConnection::Amqp(asb) => {
+		match &self.net {
+			AsbNetMode::Amqp(asb) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
@@ -260,7 +269,7 @@ impl AsbConnection {
 					_asb: PhantomData,
 				})
 			}
-			AsbConnection::Null => Ok(AsbWriter {
+			AsbNetMode::Null => Ok(AsbWriter {
 				net: AsbWriterNet::Null,
 				// No default for [WireFormat] so just picking Xml since it's the first.
 				format: WireFormat::Xml,
