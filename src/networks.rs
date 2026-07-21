@@ -30,6 +30,7 @@ use tokio::runtime::Handle;
 
 /// Manages the transport-specific data and lifetime.
 // TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
+// TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
 pub enum AsbConnection {
 	Amqp(Handle, Arc<amqp::AmqpAsb>, Option<String>),
 	Null,
