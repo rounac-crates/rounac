@@ -26,20 +26,19 @@ use std::{
 	sync::{Arc, Mutex},
 	time::Duration,
 };
-use tokio::runtime::Handle;
 
 /// Manages the transport-specific data and lifetime.
 // TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
 // TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
 pub enum AsbConnection {
-	Amqp(Handle, Arc<amqp::AmqpAsb>, Option<String>),
+	Amqp(Arc<amqp::AmqpAsb>),
 	Null,
 }
 impl Drop for AsbConnection {
 	fn drop(&mut self) {
 		match self {
-			AsbConnection::Amqp(rt, asb, _) => {
-				rt.block_on(async {
+			AsbConnection::Amqp(asb) => {
+				asb.rt_handle.block_on(async {
 					// Close channel and connection, then join background thread.
 					_ = asb.chan.clone().close().await;
 					_ = asb.conn.clone().close().await;
@@ -64,7 +63,7 @@ impl AsbConnection {
 				let rt = tokio::runtime::Builder::new_current_thread()
 					.enable_all()
 					.build()?;
-				let handle = rt.handle().clone();
+				let rt_handle = rt.handle().clone();
 
 				// Check configuration for exchange.
 				let exchange = match network.params.get("exchange") {
@@ -79,7 +78,7 @@ impl AsbConnection {
 
 				// Open the connection and create a single channel for everything.
 				let open_args = open_args_for_net(&network)?;
-				let a = rt.block_on(async {
+				let (conn, chan) = rt.block_on(async {
 					let conn = Connection::open(&open_args).await?;
 					conn.register_callback(ConnCb).await?;
 					let chan = conn.open_channel(None).await?;
@@ -99,13 +98,11 @@ impl AsbConnection {
 						chan.exchange_declare(declare_args).await?;
 					}
 
-					let a = amqp::AmqpAsb { conn, chan };
-
-					Ok::<_, amqprs::error::Error>(a)
+					Ok::<_, amqprs::error::Error>((conn, chan))
 				})?;
 
 				// Spawn background thread to drive the tokio runtime.
-				let conn_clone = a.conn.clone();
+				let conn_clone = conn.clone();
 				std::thread::spawn(move || {
 					rt.block_on(async {
 						// Yield while connection is still active.
@@ -121,7 +118,12 @@ impl AsbConnection {
 					})
 				});
 
-				Ok(AsbConnection::Amqp(handle, Arc::new(a), exchange))
+				Ok(AsbConnection::Amqp(Arc::new(amqp::AmqpAsb {
+					rt_handle,
+					conn,
+					chan,
+					exchange,
+				})))
 			}
 			NetworkKind::Null => Ok(AsbConnection::Null),
 		}
@@ -146,14 +148,14 @@ impl AsbConnection {
 		}?;
 
 		match self {
-			AsbConnection::Amqp(rt, a, exchange) => {
+			AsbConnection::Amqp(asb) => {
 				// Create a queue for this topic
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
 				// If no exchange specified use topic name, otherwise let the broker name
 				// it.
-				let queue_name = match exchange.is_some() {
+				let queue_name = match asb.exchange.is_some() {
 					true => "",
 					false => topic_name.as_str(),
 				};
@@ -174,10 +176,10 @@ impl AsbConnection {
 				};
 
 				// Do all the actual network stuff here and save tag for deleting consumer.
-				let tag = rt.block_on(async {
+				let tag = asb.rt_handle.block_on(async {
 					// Declare queue
 					// Safety: We do not set `no_wait` above.
-					let res = a.chan.queue_declare(declare_args).await?.unwrap();
+					let res = asb.chan.queue_declare(declare_args).await?.unwrap();
 
 					// Prepare the consumer arguments for the new queue. Use returned result
 					// to guarantee queue name is correct.
@@ -185,20 +187,20 @@ impl AsbConnection {
 					let consume_args = BasicConsumeArguments::new(&res.0, "");
 
 					// If an exchange is specified, bind queue to it.
-					if let Some(ex) = exchange {
+					if let Some(ref ex) = asb.exchange {
 						let args = QueueBindArguments::new(&res.0, &ex, &topic_name);
-						a.chan.queue_bind(args).await?;
+						asb.chan.queue_bind(args).await?;
 					}
 
 					// Create consumer for topic (subscribe).
-					let tag = a.chan.basic_consume(consumer, consume_args).await?;
+					let tag = asb.chan.basic_consume(consumer, consume_args).await?;
 
 					Ok::<_, amqprs::error::Error>(tag)
 				})?;
 
 				Ok(AsbReader {
 					buffer: cons,
-					net: AsbReaderNet::Amqp(rt.clone(), tag, a.clone()),
+					net: AsbReaderNet::Amqp(asb.clone(), tag),
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
 					_asb: PhantomData,
@@ -238,18 +240,22 @@ impl AsbConnection {
 		}?;
 
 		match self {
-			AsbConnection::Amqp(rt, asb, exchange) => {
+			AsbConnection::Amqp(asb) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
-				let exchange_name = exchange.as_ref().map(|s| s.as_ref()).unwrap_or_default();
+				let exchange_name = asb
+					.exchange
+					.as_ref()
+					.map(|s| s.as_ref())
+					.unwrap_or_default();
 
 				// Create the publish parameters
 				let props = BasicProperties::default();
 				let args = BasicPublishArguments::new(exchange_name, &topic_name);
 
 				Ok(AsbWriter {
-					net: AsbWriterNet::Amqp(rt.clone(), asb.clone(), props, args),
+					net: AsbWriterNet::Amqp(asb.clone(), props, args),
 					format: *wire_format,
 					_asb: PhantomData,
 				})
@@ -310,15 +316,16 @@ impl<'a, T> AsbReader<'a, T> {
 
 /// Holds all network-specific data to manage the reader/subscriber.
 pub enum AsbReaderNet {
-	Amqp(Handle, String, Arc<amqp::AmqpAsb>),
+	// .1 is consumer tag
+	Amqp(Arc<amqp::AmqpAsb>, String),
 	Null,
 }
 impl Drop for AsbReaderNet {
 	fn drop(&mut self) {
 		match self {
-			AsbReaderNet::Amqp(rt, tag, a) => {
+			AsbReaderNet::Amqp(asb, tag) => {
 				let cancel = BasicCancelArguments::new(tag);
-				_ = rt.block_on(a.chan.basic_cancel(cancel));
+				_ = asb.rt_handle.block_on(asb.chan.basic_cancel(cancel));
 			}
 			AsbReaderNet::Null => {}
 		}
@@ -332,22 +339,21 @@ pub struct AsbWriter<'a, T> {
 	_asb: PhantomData<&'a T>,
 }
 pub enum AsbWriterNet {
-	Amqp(
-		Handle,
-		Arc<amqp::AmqpAsb>,
-		BasicProperties,
-		BasicPublishArguments,
-	),
+	Amqp(Arc<amqp::AmqpAsb>, BasicProperties, BasicPublishArguments),
 	Null,
 }
 impl<'a, T: Serialize> AsbWriter<'a, T> {
 	/// Publishes `msg` to the topic specified in [create_writer()](AsbConnection::create_writer).
 	pub fn write(&self, msg: &T) -> Result<(), CalError> {
 		match &self.net {
-			AsbWriterNet::Amqp(rt, asb, props, args) => {
+			AsbWriterNet::Amqp(asb, props, args) => {
 				let data = crate::msg_serde::serialize_msg(&self.format, msg)?;
 
-				Ok(rt.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?)
+				Ok(asb.rt_handle.block_on(asb.chan.basic_publish(
+					props.clone(),
+					data,
+					args.clone(),
+				))?)
 			}
 			AsbWriterNet::Null => Ok(()),
 		}
