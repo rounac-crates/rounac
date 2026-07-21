@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::{
 	collections::HashMap,
 	marker::PhantomData,
-	sync::{Arc, Mutex},
+	ops::Deref,
+	sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
 	time::Duration,
 };
 
@@ -51,7 +52,11 @@ impl Drop for AsbNetMode {
 // TODO: Status var shared with background thread.
 // TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
 pub struct AsbConnection {
+	/// The transport-specific things.
 	net: AsbNetMode,
+	/// A flag shared with `net` that indicates the error should be checked and
+	///  ASB disabled/repaired.
+	has_net_error: Arc<AtomicBool>,
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -130,10 +135,12 @@ impl AsbConnection {
 						chan,
 						exchange,
 					})),
+					has_net_error: Arc::new(AtomicBool::new(false)),
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
+				has_net_error: Arc::new(AtomicBool::new(false)),
 			}),
 		}
 	}
@@ -212,6 +219,7 @@ impl AsbConnection {
 					net: AsbReaderNet::Amqp(asb.clone(), tag),
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
+					reader_error: Arc::new(RwLock::new(None)),
 					_asb: PhantomData,
 				})
 			}
@@ -224,6 +232,7 @@ impl AsbConnection {
 					net: AsbReaderNet::Null,
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
+					reader_error: Arc::new(RwLock::new(None)),
 					_asb: PhantomData,
 				})
 			}
@@ -290,11 +299,20 @@ pub struct AsbReader<'a, T> {
 	callback_mode: bool,
 	/// All registered listeners keyed by a random number.
 	listeners: Mutex<HashMap<u32, Box<dyn Fn(&T) + Send + Sync>>>,
+	/// Used to get or pass errors that prevent this reader from normal function.
+	reader_error: Arc<RwLock<Option<CalError>>>,
+	// Just used to tie lifetime of this object to the ASB.
 	_asb: PhantomData<&'a T>,
 }
 impl<'a, T> AsbReader<'a, T> {
 	/// Read the next message from the buffer or block until there is one.
 	pub fn read(&self) -> Result<T, CalError> {
+		// Check for an error state first.
+		if let Some(e) = self.reader_error.read().unwrap().deref() {
+			return Err(e.clone());
+		}
+
+		// Do actual read.
 		self.buffer
 			.recv()
 			.map_err(|_| CalError::other_err("Reader error".to_string()))
@@ -302,6 +320,12 @@ impl<'a, T> AsbReader<'a, T> {
 
 	/// Read the next message from the buffer or block until one is received or `timeout` is reached.
 	pub fn read_timeout(&self, timeout: Duration) -> Result<Option<T>, CalError> {
+		// Check for an error state first.
+		if let Some(e) = self.reader_error.read().unwrap().deref() {
+			return Err(e.clone());
+		}
+
+		// Do actual read.
 		match self.buffer.recv_timeout(timeout) {
 			Ok(m) => Ok(Some(m)),
 			Err(e) => match e {
@@ -313,6 +337,12 @@ impl<'a, T> AsbReader<'a, T> {
 
 	/// Read the next message from the buffer if there is one. Does not block.
 	pub fn try_read(&self) -> Result<Option<T>, CalError> {
+		// Check for an error state first.
+		if let Some(e) = self.reader_error.read().unwrap().deref() {
+			return Err(e.clone());
+		}
+
+		// Do actual read.
 		match self.buffer.try_recv() {
 			Ok(m) => Ok(Some(m)),
 			Err(e) => match e {
