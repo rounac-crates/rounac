@@ -29,7 +29,7 @@ fn main() {
 	// This must match the service name in the config to apply the configuration.
 	const SVC_NAME: &str = "basic_status_subscribe";
 
-	// Load the configuration and create the ASB + writer.
+	// Load the configuration and create the ASB + reader.
 	let config = CONFIG.parse().unwrap();
 	let asb = Asb::new(SVC_NAME, config).unwrap();
 	let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
