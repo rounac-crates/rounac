@@ -15,6 +15,7 @@ use amqprs::{
 use async_trait::async_trait;
 use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
+use tokio::runtime::Handle;
 use toml::Value;
 
 /// Get the necessary config params to create AMQP connection for `net_name`.
@@ -55,9 +56,11 @@ pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArgume
 	Ok(OpenConnectionArguments::new(host, *port as u16, user, pass))
 }
 
-pub struct AmqpAsb {
+pub(crate) struct AmqpAsb {
+	pub rt_handle: Handle,
 	pub conn: Connection,
 	pub chan: Channel,
+	pub exchange: Option<String>,
 }
 
 pub struct AmqpConsumer<T> {
@@ -74,6 +77,48 @@ impl<T: for<'de> Deserialize<'de> + Send> AsyncConsumer for AmqpConsumer<T> {
 			_ = self.buffer.send(msg);
 		}
 	}
+}
+
+pub(crate) struct ConnCb;
+#[async_trait]
+impl ConnectionCallback for ConnCb {
+	async fn close(&mut self, connection: &Connection, close: Close) -> Result<(), Error> {
+		// TODO: Have a way to relay error condition to [AsbConnection].
+		Ok(())
+	}
+
+	async fn blocked(&mut self, connection: &Connection, reason: String) {}
+
+	async fn unblocked(&mut self, connection: &Connection) {}
+
+	async fn secret_updated(&mut self, connection: &Connection) {}
+}
+
+pub(crate) struct ChanCb;
+#[async_trait]
+impl ChannelCallback for ChanCb {
+	async fn close(&mut self, _: &Channel, _: CloseChannel) -> Result<(), Error> {
+		// TODO: Have a way to relay error condition to [AsbConnection].
+		Ok(())
+	}
+
+	async fn cancel(&mut self, _: &Channel, _: Cancel) -> Result<(), Error> {
+		// TODO: Have a way to relay error condition to [AsbReader].
+		Ok(())
+	}
+
+	async fn flow(&mut self, _: &Channel, _: bool) -> Result<bool, Error> {
+		Ok(true)
+	}
+
+	async fn publish_ack(&mut self, _: &Channel, _: Ack) {}
+
+	async fn publish_nack(&mut self, _: &Channel, _: Nack) {
+		// TODO: If topic QoS dictates reliable, figure out how to get writer to
+		//       re-send if `nack.requeue` is false.
+	}
+
+	async fn publish_return(&mut self, _: &Channel, _: Return, _: BasicProperties, _: Vec<u8>) {}
 }
 
 /// Type to debug connection issues with AMQP.

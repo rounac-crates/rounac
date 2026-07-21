@@ -6,11 +6,11 @@ use crate::{
 	Topic,
 	config::{AsbConfig, NetworkKind, WireFormat},
 	error::CalError,
+	networks::amqp::{ChanCb, ConnCb},
 };
 use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
 	BasicProperties,
-	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
 	channel::{
 		BasicCancelArguments, BasicConsumeArguments, BasicPublishArguments,
 		ExchangeDeclareArguments, QueueBindArguments, QueueDeclareArguments,
@@ -81,12 +81,13 @@ impl AsbConnection {
 				let open_args = open_args_for_net(&network)?;
 				let a = rt.block_on(async {
 					let conn = Connection::open(&open_args).await?;
-					conn.register_callback(DefaultConnectionCallback).await?;
+					conn.register_callback(ConnCb).await?;
 					let chan = conn.open_channel(None).await?;
-					chan.register_callback(DefaultChannelCallback).await?;
+					chan.register_callback(ChanCb).await?;
 					chan.flow(true).await?; // Kickstart traffic flowing
 
-					// TODO: If config has exchange name, create direct exchange.
+					// If config has exchange name, create direct exchange.
+					// TODO: Add "durable_exchange" bool parameter to config.
 					if let Some(ref ex) = exchange {
 						let declare_args = ExchangeDeclareArguments::of_type(
 							ex,
