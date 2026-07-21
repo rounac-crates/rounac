@@ -4,6 +4,7 @@ use std::{
 	error::Error,
 	fmt::{self, Display},
 	io,
+	sync::Arc,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,9 +22,10 @@ pub enum CalErrorKind {
 	/// An error not covered by another category.
 	Other,
 }
+#[derive(Clone)]
 pub struct CalError {
 	kind: CalErrorKind,
-	data: Box<dyn Error>,
+	data: Arc<dyn Error>,
 }
 impl CalError {
 	pub fn kind(&self) -> CalErrorKind {
@@ -34,7 +36,7 @@ impl CalError {
 	pub fn config_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Config,
-			data: msg.into(),
+			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
 
@@ -42,7 +44,7 @@ impl CalError {
 	pub fn net_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Network,
-			data: msg.into(),
+			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
 
@@ -50,7 +52,7 @@ impl CalError {
 	pub fn other_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Other,
-			data: msg.into(),
+			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
 
@@ -58,7 +60,7 @@ impl CalError {
 	pub fn serde_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Serde,
-			data: msg.into(),
+			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
 
@@ -66,7 +68,7 @@ impl CalError {
 	pub fn topic_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Topic,
-			data: msg.into(),
+			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
 }
@@ -91,7 +93,7 @@ macro_rules! calerror_conversions {
 			fn from(e: $error) -> Self {
 				CalError {
 					kind: $kind,
-					data: e.into(),
+					data: Arc::from(Box::<dyn Error>::from(e)),
 				}
 			}
 		}
