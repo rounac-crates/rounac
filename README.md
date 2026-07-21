@@ -1,6 +1,54 @@
 # Rounac
 The Rust [OMS][1] [UCI][2] Not-A-CAL; pronounced "Runic".
 
+# Example
+This is a basic example of subscribing to a topic, taken directly from the
+`basic_status_subscribe` example in the repo but shortened slightly.
+
+```rust
+use rounac::{Asb, QosSettings, Topic};
+use rounac_uci::v2_5::elements::ServiceStatus;
+use std::time::{Duration, Instant};
+
+// Minimal configuration for RabbitMQ.
+const CONFIG: &str = r#"
+[services.basic_status_subscribe]
+network = "rabbit"
+wire_format = "xml"
+
+[networks.rabbit]
+kind = "amqp"
+host = "localhost"
+port = 5672
+username = "guest"
+password = "guest"
+"#;
+
+fn main() {
+    // Load the configuration and create the ASB + reader.
+    let config = CONFIG.parse().unwrap();
+    let asb = Asb::new("basic_status_subscribe", config).unwrap();
+    let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
+    let reader = asb.new_reader(&topic).unwrap();
+
+    // Loop and send a few status messages.
+    let listen_time = Duration::from_secs(10);
+    let start = Instant::now();
+    let mut now = Duration::ZERO;
+    let mut remaining = listen_time;
+
+    // Listen for `listen_time`.
+    while !remaining.is_zero() {
+        if let Ok(Some(msg)) = reader.read_timeout(remaining) {
+            println!("Received status from {}!", msg.message_data.service_id.uuid);
+        }
+
+        now = start.elapsed();
+        remaining = listen_time.saturating_sub(now);
+    }
+}
+```
+
 # Supported transports
 ## AMQP (in progress)
 `amqprs`
