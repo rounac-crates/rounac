@@ -28,11 +28,16 @@
 //! [networks.rabbitmq]
 //! # Required network kind, which defines remaining parameters.
 //! kind = "amqp"
-//! # AMQP-specific parameters
+//! ## AMQP-specific parameters
+//! # Required hostname of broker.
 //! host = "localhost"
+//! # Required port of broker
 //! port = 5672
+//! # Required credentials to access broker.
 //! username = "guest"
 //! password = "guest"
+//! # Optional non-empty exchange name to segregate traffic on this ASB.
+//! exchange = "rounac"
 //!
 //! # A null network always succeeds but does nothing.
 //! [networks.blackhole]

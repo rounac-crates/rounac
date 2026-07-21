@@ -12,7 +12,8 @@ use amqprs::{
 	BasicProperties,
 	callbacks::{DefaultChannelCallback, DefaultConnectionCallback},
 	channel::{
-		BasicCancelArguments, BasicConsumeArguments, BasicPublishArguments, QueueDeclareArguments,
+		BasicCancelArguments, BasicConsumeArguments, BasicPublishArguments,
+		ExchangeDeclareArguments, QueueBindArguments, QueueDeclareArguments,
 	},
 	connection::Connection,
 };
@@ -30,13 +31,13 @@ use tokio::runtime::Handle;
 /// Manages the transport-specific data and lifetime.
 // TODO: Refactor to struct to store Option<Handle> and a status var shared with background thread.
 pub enum AsbConnection {
-	Amqp(Handle, Arc<amqp::AmqpAsb>),
+	Amqp(Handle, Arc<amqp::AmqpAsb>, Option<String>),
 	Null,
 }
 impl Drop for AsbConnection {
 	fn drop(&mut self) {
 		match self {
-			AsbConnection::Amqp(rt, asb) => {
+			AsbConnection::Amqp(rt, asb, _) => {
 				rt.block_on(async {
 					// Close channel and connection, then join background thread.
 					_ = asb.chan.clone().close().await;
@@ -64,6 +65,17 @@ impl AsbConnection {
 					.build()?;
 				let handle = rt.handle().clone();
 
+				// Check configuration for exchange.
+				let exchange = match network.params.get("exchange") {
+					Some(toml::Value::String(ex)) if !ex.is_empty() => Some(ex.to_owned()),
+					Some(_) => {
+						return Err(CalError::config_err(format!(
+							"AMQP parameter \"exchange\" must be a non-empty string."
+						)));
+					}
+					None => None,
+				};
+
 				// Open the connection and create a single channel for everything.
 				let open_args = open_args_for_net(&network)?;
 				let a = rt.block_on(async {
@@ -74,6 +86,16 @@ impl AsbConnection {
 					chan.flow(true).await?; // Kickstart traffic flowing
 
 					// TODO: If config has exchange name, create direct exchange.
+					if let Some(ref ex) = exchange {
+						let declare_args = ExchangeDeclareArguments::of_type(
+							ex,
+							amqprs::channel::ExchangeType::Direct,
+						)
+						.durable(true)
+						.finish();
+
+						chan.exchange_declare(declare_args).await?;
+					}
 
 					let a = amqp::AmqpAsb { conn, chan };
 
@@ -97,7 +119,7 @@ impl AsbConnection {
 					})
 				});
 
-				Ok(AsbConnection::Amqp(handle, Arc::new(a)))
+				Ok(AsbConnection::Amqp(handle, Arc::new(a), exchange))
 			}
 			NetworkKind::Null => Ok(AsbConnection::Null),
 		}
@@ -122,37 +144,49 @@ impl AsbConnection {
 		}?;
 
 		match self {
-			AsbConnection::Amqp(rt, a) => {
+			AsbConnection::Amqp(rt, a, exchange) => {
 				// Create a queue for this topic
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
-				// Prepare arguments
-				// If `auto_delete`, also require `exclusive` since RabbitMQ hard errors otherwise.
-				let declare_args = QueueDeclareArguments::new(&topic_name)
+				// If no exchange specified use topic name, otherwise let the broker name
+				// it.
+				let queue_name = match exchange.is_some() {
+					true => "",
+					false => topic_name.as_str(),
+				};
+
+				// Prepare declare queue args.
+				// If `auto_delete` desired, then `exclusive` must be true to avoid error
+				// with RabbitMQ due to deprecated combination.
+				let declare_args = QueueDeclareArguments::new(queue_name)
 					.exclusive(true)
 					.auto_delete(true)
 					.finish();
 
-				// TODO: Create QueueBindArguments if exchange is used. Bind to default exchange is automatic from declaration.
-
-				// Create consumer object for reader with mpsc channel or shared ring buffer.
-				// amqprs::consumer::AsyncConsumer
-				// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
-				let consume_args = BasicConsumeArguments::new(&topic_name, "");
-
-				// Create a ring buffer and split into producer and consumer.
+				// Create the ring buffer for the reader and consumer.
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer);
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffer: prod,
 				};
 
+				// Do all the actual network stuff here and save tag for deleting consumer.
 				let tag = rt.block_on(async {
 					// Declare queue
-					a.chan.queue_declare(declare_args).await?;
+					// Safety: We do not set `no_wait` above.
+					let res = a.chan.queue_declare(declare_args).await?.unwrap();
 
-					// TODO: Bind queue to exchange if necessary
+					// Prepare the consumer arguments for the new queue. Use returned result
+					// to guarantee queue name is correct.
+					// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
+					let consume_args = BasicConsumeArguments::new(&res.0, "");
+
+					// If an exchange is specified, bind queue to it.
+					if let Some(ex) = exchange {
+						let args = QueueBindArguments::new(&res.0, &ex, &topic_name);
+						a.chan.queue_bind(args).await?;
+					}
 
 					// Create consumer for topic (subscribe).
 					let tag = a.chan.basic_consume(consumer, consume_args).await?;
@@ -200,13 +234,15 @@ impl AsbConnection {
 		}?;
 
 		match self {
-			AsbConnection::Amqp(rt, asb) => {
+			AsbConnection::Amqp(rt, asb, exchange) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
+				let exchange_name = exchange.as_ref().map(|s| s.as_ref()).unwrap_or_default();
+
 				// Create the publish parameters
 				let props = BasicProperties::default();
-				let args = BasicPublishArguments::new("", &topic_name);
+				let args = BasicPublishArguments::new(exchange_name, &topic_name);
 
 				Ok(AsbWriter::Amqp(
 					rt.clone(),
