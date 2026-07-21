@@ -31,6 +31,7 @@ host = "localhost"
 port = 5672
 username = "guest"
 password = "guest"
+exchange = "rounac"
 "#;
 
 /// Returns empty security information for an unclassified USA producer.
