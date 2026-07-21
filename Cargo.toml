@@ -24,11 +24,9 @@ uuid = { version = "1.23.4", features = ["serde", "v4"] }
 
 [[example]]
 name = "basic_status_publish"
-required-features = ["uci-2_5"]
 
 [[example]]
 name = "basic_status_subscribe"
-required-features = ["uci-2_5"]
 
 #[features]
 #agra-5_0 = ["rounac-agra/v5_0"]
@@ -36,3 +34,4 @@ required-features = ["uci-2_5"]
 
 [dev-dependencies]
 chrono = "0.4.45"
+rounac-uci = "0.0.0"
