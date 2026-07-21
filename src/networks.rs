@@ -125,12 +125,12 @@ impl AsbConnection {
 		}
 	}
 
-	pub fn create_reader<T: for<'de> Deserialize<'de> + Send + 'static>(
-		&self,
+	pub fn create_reader<'a, T: for<'de> Deserialize<'de> + Send + 'static>(
+		&'a self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
 		svc_name: &str,
-	) -> Result<AsbReader<T>, CalError> {
+	) -> Result<AsbReader<'a, T>, CalError> {
 		// Check for the wire format first
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
@@ -199,6 +199,7 @@ impl AsbConnection {
 					net: AsbReaderNet::Amqp(rt.clone(), tag, a.clone()),
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
+					_asb: PhantomData,
 				})
 			}
 			AsbConnection::Null => {
@@ -210,17 +211,18 @@ impl AsbConnection {
 					net: AsbReaderNet::Null,
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
+					_asb: PhantomData,
 				})
 			}
 		}
 	}
 
-	pub fn create_writer<T>(
-		&self,
+	pub fn create_writer<'a, T>(
+		&'a self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
 		svc_name: &str,
-	) -> Result<AsbWriter<T>, CalError> {
+	) -> Result<AsbWriter<'a, T>, CalError> {
 		// Check for the wire format first
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
@@ -244,16 +246,18 @@ impl AsbConnection {
 				let props = BasicProperties::default();
 				let args = BasicPublishArguments::new(exchange_name, &topic_name);
 
-				Ok(AsbWriter::Amqp(
-					rt.clone(),
-					asb.clone(),
-					*wire_format,
-					props,
-					args,
-					PhantomData,
-				))
+				Ok(AsbWriter {
+					net: AsbWriterNet::Amqp(rt.clone(), asb.clone(), props, args),
+					format: *wire_format,
+					_asb: PhantomData,
+				})
 			}
-			AsbConnection::Null => Ok(AsbWriter::Null),
+			AsbConnection::Null => Ok(AsbWriter {
+				net: AsbWriterNet::Null,
+				// No default for [WireFormat] so just picking Xml since it's the first.
+				format: WireFormat::Xml,
+				_asb: PhantomData,
+			}),
 		}
 	}
 }
@@ -261,7 +265,7 @@ impl AsbConnection {
 /// Provides messages received from the ASB through a polling interface.
 ///
 /// **IMPORTANT**: If the network type is "null" then all read methods will error.
-pub struct AsbReader<T> {
+pub struct AsbReader<'a, T> {
 	buffer: RingReceiver<T>,
 	net: AsbReaderNet,
 	/// Whether this reader has registered listeners and should disallow `read()`.
@@ -269,8 +273,9 @@ pub struct AsbReader<T> {
 	callback_mode: bool,
 	/// All registered listeners keyed by a random number.
 	listeners: Mutex<HashMap<u32, Box<dyn Fn(&T) + Send + Sync>>>,
+	_asb: PhantomData<&'a T>,
 }
-impl<T> AsbReader<T> {
+impl<'a, T> AsbReader<'a, T> {
 	/// Read the next message from the buffer or block until there is one.
 	pub fn read(&self) -> Result<T, CalError> {
 		self.buffer
@@ -319,28 +324,30 @@ impl Drop for AsbReaderNet {
 }
 
 /// Publishes messages to the ASB on the topic specified during construction.
-// TODO: Refactor to shrink tuple size and/or convert to struct with common
-//       elements like `Handle` and `WireFormat`.
-pub enum AsbWriter<T> {
+pub struct AsbWriter<'a, T> {
+	net: AsbWriterNet,
+	format: WireFormat,
+	_asb: PhantomData<&'a T>,
+}
+pub enum AsbWriterNet {
 	Amqp(
 		Handle,
 		Arc<amqp::AmqpAsb>,
-		WireFormat,
 		BasicProperties,
 		BasicPublishArguments,
-		PhantomData<T>,
 	),
 	Null,
 }
-impl<T: Serialize> AsbWriter<T> {
+impl<'a, T: Serialize> AsbWriter<'a, T> {
+	/// Publishes `msg` to the topic specified in [create_writer()](AsbConnection::create_writer).
 	pub fn write(&self, msg: &T) -> Result<(), CalError> {
-		match self {
-			AsbWriter::Amqp(rt, asb, format, props, args, _) => {
-				let data = crate::msg_serde::serialize_msg(format, msg)?;
+		match &self.net {
+			AsbWriterNet::Amqp(rt, asb, props, args) => {
+				let data = crate::msg_serde::serialize_msg(&self.format, msg)?;
 
 				Ok(rt.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?)
 			}
-			AsbWriter::Null => Ok(()),
+			AsbWriterNet::Null => Ok(()),
 		}
 	}
 }

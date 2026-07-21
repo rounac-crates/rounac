@@ -170,17 +170,20 @@ impl Asb {
 	}
 
 	/// Create a new [AsbReader] for the given [Topic].
-	pub fn new_reader<T: for<'de> Deserialize<'de> + Send + 'static>(
-		&self,
+	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + 'static>(
+		&'a self,
 		topic: &Topic<T>,
-	) -> Result<AsbReader<T>, CalError> {
+	) -> Result<AsbReader<'a, T>, CalError> {
 		Ok(self
 			.connection
 			.create_reader(topic, &self.config, &self.service_name)?)
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
-	pub fn new_writer<T: Serialize>(&self, topic: &Topic<T>) -> Result<AsbWriter<T>, CalError> {
+	pub fn new_writer<'a, T: Serialize>(
+		&'a self,
+		topic: &Topic<T>,
+	) -> Result<AsbWriter<'a, T>, CalError> {
 		Ok(self
 			.connection
 			.create_writer(topic, &self.config, &self.service_name)?)
