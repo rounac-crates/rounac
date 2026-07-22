@@ -75,7 +75,7 @@ impl AsbConnection {
 					.build()?;
 				let rt_handle = rt.handle().clone();
 
-				// Check configuration for exchange.
+				// Check configuration for exchange and durability parameter.
 				let exchange = match network.params.get("exchange") {
 					Some(toml::Value::String(ex)) if !ex.is_empty() => Some(ex.to_owned()),
 					Some(_) => {
@@ -84,6 +84,15 @@ impl AsbConnection {
 						)));
 					}
 					None => None,
+				};
+				let durable = match network.params.get("durable_exchange") {
+					Some(toml::Value::Boolean(ex)) => *ex,
+					Some(_) => {
+						return Err(CalError::config_err(format!(
+							"AMQP parameter \"durable_exchange\" must be a boolean."
+						)));
+					}
+					None => true,
 				};
 
 				// Open the connection and create a single channel for everything.
@@ -102,7 +111,7 @@ impl AsbConnection {
 							ex,
 							amqprs::channel::ExchangeType::Direct,
 						)
-						.durable(true)
+						.durable(durable)
 						.finish();
 
 						chan.exchange_declare(declare_args).await?;

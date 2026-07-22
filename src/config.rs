@@ -38,6 +38,8 @@
 //! password = "guest"
 //! # Optional non-empty exchange name to segregate traffic on this ASB.
 //! exchange = "rounac"
+//! # Optional boolean to specify exchange durability. Defaults to true.
+//! durable_exchange = true
 //!
 //! # A null network always succeeds but does nothing.
 //! [networks.blackhole]
