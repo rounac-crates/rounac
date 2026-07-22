@@ -41,7 +41,7 @@ fn main() {
 	// Loop and send a few status messages.
 	let listen_time = Duration::from_secs(10);
 	let start = Instant::now();
-	let mut now = Duration::ZERO;
+	let mut now;
 	let mut remaining = listen_time;
 
 	println!(
@@ -49,14 +49,24 @@ fn main() {
 		listen_time.as_secs()
 	);
 	while !remaining.is_zero() {
-		if let Ok(Some(msg)) = reader.read_timeout(remaining) {
-			println!("Received status from {}!", msg.message_data.service_id.uuid);
+		match reader.read_timeout(remaining) {
+			// Print some information and check schema if message received.
+			Ok(Some(msg)) => {
+				println!("Received status from {}!", msg.message_data.service_id.uuid);
 
-			// Check schema version in header just to do something.
-			if msg.message_header.schema_version != schema_ver {
-				eprintln!("Status has mismatched schema version!!");
+				// Check schema version in header just to do something.
+				if msg.message_header.schema_version != schema_ver {
+					eprintln!("Status has mismatched schema version!!");
+				}
 			}
-		}
+			// No message no error just keep going.
+			Ok(None) => {}
+			// If error stop trying to receive.
+			Err(e) => {
+				eprintln!("Reader error: {e}");
+				break;
+			}
+		};
 
 		now = start.elapsed();
 		remaining = listen_time.saturating_sub(now);
