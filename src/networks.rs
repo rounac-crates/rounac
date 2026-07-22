@@ -105,7 +105,6 @@ impl AsbConnection {
 					chan.flow(true).await?; // Kickstart traffic flowing
 
 					// If config has exchange name, create direct exchange.
-					// TODO: Add "durable_exchange" bool parameter to config.
 					if let Some(ref ex) = exchange {
 						let declare_args = ExchangeDeclareArguments::of_type(
 							ex,
