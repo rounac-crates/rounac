@@ -15,6 +15,10 @@ use amqprs::{
 use async_trait::async_trait;
 use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
+use std::{
+	collections::HashMap,
+	sync::{Arc, OnceLock, RwLock},
+};
 use tokio::runtime::Handle;
 use toml::Value;
 
@@ -84,6 +88,10 @@ pub(crate) struct ConnCb;
 impl ConnectionCallback for ConnCb {
 	async fn close(&mut self, connection: &Connection, close: Close) -> Result<(), Error> {
 		// TODO: Have a way to relay error condition to [AsbConnection].
+		eprintln!(
+			"ERROR: Connection({}) closed by server: {close}",
+			connection.connection_name()
+		);
 		Ok(())
 	}
 
@@ -97,13 +105,21 @@ impl ConnectionCallback for ConnCb {
 pub(crate) struct ChanCb;
 #[async_trait]
 impl ChannelCallback for ChanCb {
-	async fn close(&mut self, _: &Channel, _: CloseChannel) -> Result<(), Error> {
+	async fn close(&mut self, chan: &Channel, close_channel: CloseChannel) -> Result<(), Error> {
 		// TODO: Have a way to relay error condition to [AsbConnection].
+		eprintln!(
+			"ERROR: Channel({}) closed by server: {close_channel}",
+			chan.channel_id()
+		);
 		Ok(())
 	}
 
-	async fn cancel(&mut self, _: &Channel, _: Cancel) -> Result<(), Error> {
-		// TODO: Have a way to relay error condition to [AsbReader].
+	async fn cancel(&mut self, chan: &Channel, cancel: Cancel) -> Result<(), Error> {
+		// TODO: Have a way to relay error condition to [AsbReader] or [AsbConnection].
+		eprintln!(
+			"ERROR: Channel({}) consumer cancelled by server: {cancel:?}",
+			chan.channel_id()
+		);
 		Ok(())
 	}
 
@@ -119,71 +135,4 @@ impl ChannelCallback for ChanCb {
 	}
 
 	async fn publish_return(&mut self, _: &Channel, _: Return, _: BasicProperties, _: Vec<u8>) {}
-}
-
-/// Type to debug connection issues with AMQP.
-#[cfg(debug_assertions)]
-pub(crate) struct DebugConnectionCallback;
-#[cfg(debug_assertions)]
-#[async_trait]
-impl ConnectionCallback for DebugConnectionCallback {
-	async fn close(&mut self, connection: &Connection, close: Close) -> Result<(), Error> {
-		eprintln!(
-			"DEBUG: Connection({}) close(): {close:?}",
-			connection.connection_name()
-		);
-		Ok(())
-	}
-
-	async fn blocked(&mut self, connection: &Connection, reason: String) {}
-
-	async fn unblocked(&mut self, connection: &Connection) {}
-
-	async fn secret_updated(&mut self, connection: &Connection) {}
-}
-
-/// Type to debug channel issues with AMQP.
-#[cfg(debug_assertions)]
-pub(crate) struct DebugChannelCallback;
-#[cfg(debug_assertions)]
-#[async_trait]
-impl ChannelCallback for DebugChannelCallback {
-	async fn close(&mut self, channel: &Channel, close: CloseChannel) -> Result<(), Error> {
-		eprintln!(
-			"DEBUG: Channel({}) close(): {close:?}",
-			channel.channel_id()
-		);
-		Ok(())
-	}
-
-	async fn cancel(&mut self, channel: &Channel, cancel: Cancel) -> Result<(), Error> {
-		eprintln!(
-			"DEBUG: Channel({}) cancel(): {cancel:?}",
-			channel.channel_id()
-		);
-		Ok(())
-	}
-
-	async fn flow(&mut self, channel: &Channel, active: bool) -> Result<bool, Error> {
-		eprintln!("DEBUG: Channel({}) flow(): {active}", channel.channel_id());
-		Ok(true)
-	}
-
-	async fn publish_ack(&mut self, channel: &Channel, ack: Ack) {
-		eprintln!("DEBUG: Channel({}) ack(): {ack:?}", channel.channel_id());
-	}
-
-	async fn publish_nack(&mut self, channel: &Channel, nack: Nack) {
-		eprintln!("DEBUG: Channel({}) nack(): {nack:?}", channel.channel_id());
-	}
-
-	async fn publish_return(
-		&mut self,
-		channel: &Channel,
-		ret: Return,
-		basic_properties: BasicProperties,
-		content: Vec<u8>,
-	) {
-		eprintln!("DEBUG: Channel({}) return(): {ret:?}", channel.channel_id());
-	}
 }
