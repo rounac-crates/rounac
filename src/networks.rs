@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::{
 	collections::HashMap,
 	marker::PhantomData,
-	sync::{Arc, Mutex, atomic::AtomicBool},
+	sync::{Arc, Mutex},
 	time::Duration,
 };
 
@@ -53,9 +53,6 @@ impl Drop for AsbNetMode {
 pub struct AsbConnection {
 	/// The transport-specific things.
 	net: AsbNetMode,
-	/// A flag shared with `net` that indicates the error should be checked and
-	///  ASB disabled/repaired.
-	has_net_error: Arc<AtomicBool>,
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -139,12 +136,10 @@ impl AsbConnection {
 						chan,
 						exchange,
 					})),
-					has_net_error: Arc::new(AtomicBool::new(false)),
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
-				has_net_error: Arc::new(AtomicBool::new(false)),
 			}),
 		}
 	}
