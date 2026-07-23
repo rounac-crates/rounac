@@ -7,7 +7,7 @@ use crate::{
 use amqprs::{
 	Ack, BasicProperties, Cancel, Close, CloseChannel, Deliver, Nack, Return,
 	callbacks::{ChannelCallback, ConnectionCallback},
-	channel::Channel,
+	channel::{BasicAckArguments, Channel},
 	connection::{Connection, OpenConnectionArguments},
 	consumer::AsyncConsumer,
 	error::Error,
@@ -70,15 +70,35 @@ pub(crate) struct AmqpAsb {
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
 	pub buffer: RingSender<Arc<T>>,
+	pub auto_ack: bool,
 }
 
 #[async_trait]
 impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<T> {
-	async fn consume(&mut self, _: &Channel, _: Deliver, _: BasicProperties, data: Vec<u8>) {
-		// Deserialize message
+	async fn consume(
+		&mut self,
+		chan: &Channel,
+		deliver: Deliver,
+		_: BasicProperties,
+		data: Vec<u8>,
+	) {
+		// Deserialize message first so reader gets it
 		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
 			// Add to ring buffer
 			_ = self.buffer.send(Arc::new(msg));
+		}
+
+		// Then if we need to ACK, do that.
+		if !self.auto_ack {
+			let ack_args = BasicAckArguments::new(deliver.delivery_tag(), false);
+
+			// Try to ACK some number of times before giving up.
+			const MAX_ACK_TRIES: usize = 2;
+			for _ in 0..MAX_ACK_TRIES {
+				if chan.basic_ack(ack_args.clone()).await.is_ok() {
+					break;
+				}
+			}
 		}
 	}
 }

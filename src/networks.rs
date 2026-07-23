@@ -181,11 +181,18 @@ impl AsbConnection {
 					.auto_delete(true)
 					.finish();
 
+				// Determine ACK based on QoS. True means server assumes delivery.
+				let auto_ack = match topic.qos.reliability {
+					ReliabilityQos::BestEffort => true,
+					ReliabilityQos::Reliable => false,
+				};
+
 				// Create the ring buffer for the reader and consumer.
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer.max(1));
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffer: prod,
+					auto_ack,
 				};
 
 				// Do all the actual network stuff here and save tag for deleting consumer.
@@ -196,13 +203,8 @@ impl AsbConnection {
 
 					// Prepare the consumer arguments for the new queue. Use returned result
 					// to guarantee queue name is correct.
-					// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
-					let no_ack = match topic.qos.reliability {
-						ReliabilityQos::BestEffort => true,
-						ReliabilityQos::Reliable => false,
-					};
 					let consume_args = BasicConsumeArguments::new(&res.0, "")
-						.auto_ack(no_ack)
+						.auto_ack(auto_ack)
 						.finish();
 
 					// If an exchange is specified, bind queue to it.
