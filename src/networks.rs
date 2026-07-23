@@ -182,7 +182,7 @@ impl AsbConnection {
 					.finish();
 
 				// Create the ring buffer for the reader and consumer.
-				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer);
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer.max(1));
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffer: prod,
@@ -197,9 +197,16 @@ impl AsbConnection {
 					// Prepare the consumer arguments for the new queue. Use returned result
 					// to guarantee queue name is correct.
 					// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
-					let consume_args = BasicConsumeArguments::new(&res.0, "");
+					let no_ack = match topic.qos.reliability {
+						crate::ReliabilityQos::BestEffort => true,
+						crate::ReliabilityQos::Reliable => false,
+					};
+					let consume_args = BasicConsumeArguments::new(&res.0, "")
+						.auto_ack(no_ack)
+						.finish();
 
 					// If an exchange is specified, bind queue to it.
+					// TODO: Is QoS expiration, set `x-message-ttl` to millis
 					if let Some(ref ex) = asb.exchange {
 						let args = QueueBindArguments::new(&res.0, &ex, &topic_name);
 						asb.chan.queue_bind(args).await?;
