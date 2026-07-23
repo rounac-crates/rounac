@@ -142,7 +142,7 @@ impl AsbConnection {
 		}
 	}
 
-	pub fn create_reader<'a, T: for<'de> Deserialize<'de> + Send + 'static>(
+	pub fn create_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		&'a self,
 		topic: &Topic<T>,
 		config: &AsbConfig,
@@ -287,7 +287,7 @@ impl AsbConnection {
 ///
 /// **IMPORTANT**: If the network type is "null" then all read methods will error.
 pub struct AsbReader<'a, T> {
-	buffer: RingReceiver<T>,
+	buffer: RingReceiver<Arc<T>>,
 	net: AsbReaderNet,
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	// Option<JoinHandle<RingReceiver<T>>> - Pass RingReceiver back and forth, or just clone it.
@@ -299,7 +299,7 @@ pub struct AsbReader<'a, T> {
 }
 impl<'a, T> AsbReader<'a, T> {
 	/// Read the next message from the buffer or block until there is one.
-	pub fn read(&self) -> Result<T, CalError> {
+	pub fn read(&self) -> Result<Arc<T>, CalError> {
 		// Do actual read.
 		self.buffer
 			.recv()
@@ -307,7 +307,7 @@ impl<'a, T> AsbReader<'a, T> {
 	}
 
 	/// Read the next message from the buffer or block until one is received or `timeout` is reached.
-	pub fn read_timeout(&self, timeout: Duration) -> Result<Option<T>, CalError> {
+	pub fn read_timeout(&self, timeout: Duration) -> Result<Option<Arc<T>>, CalError> {
 		// Do actual read.
 		match self.buffer.recv_timeout(timeout) {
 			Ok(m) => Ok(Some(m)),
@@ -321,7 +321,7 @@ impl<'a, T> AsbReader<'a, T> {
 	}
 
 	/// Read the next message from the buffer if there is one. Does not block.
-	pub fn try_read(&self) -> Result<Option<T>, CalError> {
+	pub fn try_read(&self) -> Result<Option<Arc<T>>, CalError> {
 		// Do actual read.
 		match self.buffer.try_recv() {
 			Ok(m) => Ok(Some(m)),

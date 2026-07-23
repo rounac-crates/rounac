@@ -69,16 +69,16 @@ pub(crate) struct AmqpAsb {
 
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
-	pub buffer: RingSender<T>,
+	pub buffer: RingSender<Arc<T>>,
 }
 
 #[async_trait]
-impl<T: for<'de> Deserialize<'de> + Send> AsyncConsumer for AmqpConsumer<T> {
+impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<T> {
 	async fn consume(&mut self, _: &Channel, _: Deliver, _: BasicProperties, data: Vec<u8>) {
 		// Deserialize message
 		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
 			// Add to ring buffer
-			_ = self.buffer.send(msg);
+			_ = self.buffer.send(Arc::new(msg));
 		}
 	}
 }

@@ -170,7 +170,7 @@ impl Asb {
 	}
 
 	/// Create a new [AsbReader] for the given [Topic].
-	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + 'static>(
+	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		&'a self,
 		topic: &Topic<T>,
 	) -> Result<AsbReader<'a, T>, CalError> {
