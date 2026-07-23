@@ -125,12 +125,9 @@ impl AsbConnection {
 						// Yield while connection is still active.
 						// Connection gets dropped last so tokio runtime must live beyond that.
 						while conn_clone.is_open() {
-							// Yield a few times before re-checking channel to avoid saturation.
-							// TODO: Tune number to see what effect it has.
-							// NOTE: Perhaps a time-based condition would be better.
-							for _ in 0..20 {
-								tokio::task::yield_now().await;
-							}
+							// Yield then sleep to avoid hogging CPU and async time.
+							tokio::task::yield_now().await;
+							tokio::time::sleep(Duration::from_micros(50)).await;
 						}
 					})
 				});
