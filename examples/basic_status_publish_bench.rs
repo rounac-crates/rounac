@@ -4,7 +4,7 @@
 //! message over an AMQP (RabbitMQ) network.
 
 use chrono::TimeDelta;
-use rounac::{Asb, QosSettings, Topic};
+use rounac::{Asb, Topic};
 use rounac_uci::v2_5::{
 	choices::OwnerProducerChoiceType,
 	elements::ServiceStatus,
@@ -110,7 +110,7 @@ fn main() {
 	// Load the configuration and create the ASB + writer.
 	let config = CONFIG.parse().unwrap();
 	let asb = Asb::new(SVC_NAME, config).unwrap();
-	let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
+	let topic = Topic::<ServiceStatus>::new("status").unwrap();
 	let writer = asb.new_writer(&topic).unwrap();
 
 	// Get the UCI schema version.

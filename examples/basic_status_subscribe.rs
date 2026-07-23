@@ -3,7 +3,7 @@
 //! This example will demonstrate basic subscribing using a `ServiceStatus`
 //! message from an AMQP (RabbitMQ) network.
 
-use rounac::{Asb, QosSettings, Topic};
+use rounac::{Asb, Topic};
 use rounac_uci::v2_5::elements::ServiceStatus;
 use std::time::{Duration, Instant};
 
@@ -32,7 +32,7 @@ fn main() {
 	// Load the configuration and create the ASB + reader.
 	let config = CONFIG.parse().unwrap();
 	let asb = Asb::new(SVC_NAME, config).unwrap();
-	let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
+	let topic = Topic::<ServiceStatus>::new("status").unwrap();
 	let reader = asb.new_reader(&topic).unwrap();
 
 	// Get the UCI schema version.

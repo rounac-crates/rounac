@@ -14,7 +14,7 @@ pub use crate::error::{CalError, CalErrorKind};
 use crate::networks::AsbConnection;
 pub use crate::networks::{AsbReader, AsbWriter};
 
-use config::AsbConfig;
+use config::{AsbConfig, QosSettings};
 use serde::{Deserialize, Serialize};
 use std::{
 	default::Default,
@@ -24,7 +24,6 @@ use std::{
 		atomic::{AtomicUsize, Ordering},
 	},
 	thread,
-	time::Duration,
 };
 use uuid::Uuid;
 
@@ -190,37 +189,6 @@ impl Asb {
 	}
 }
 
-/// Reliability types for a CAL.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ReliabilityQos {
-	Reliable,
-	BestEffort,
-}
-impl Default for ReliabilityQos {
-	fn default() -> Self {
-		ReliabilityQos::BestEffort
-	}
-}
-
-/// Quality-of-Service settings for the CAL.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct QosSettings {
-	time_based_filter: Option<Duration>,
-	reliability: ReliabilityQos,
-	expiration: Option<Duration>,
-	buffer: usize,
-}
-impl Default for QosSettings {
-	fn default() -> Self {
-		QosSettings {
-			time_based_filter: None,
-			reliability: ReliabilityQos::default(),
-			expiration: None,
-			buffer: 1,
-		}
-	}
-}
-
 /// CAL topic. A combination of name, QoS, and a message type.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Topic<T> {
@@ -230,7 +198,7 @@ pub struct Topic<T> {
 }
 // TODO: Restrict T to be a valid type for sending (minimum serde, possibly specific message trait)
 impl<T> Topic<T> {
-	pub fn new(name: &str, qos: QosSettings) -> Result<Self, CalError> {
+	pub fn new(name: &str) -> Result<Self, CalError> {
 		// Restrict topic names to ASCII alphanumeric to minimize potential issues with ASB transports.
 		if name.contains(|c: char| !c.is_ascii_alphanumeric()) {
 			return Err(CalError::topic_err(format!(
@@ -240,7 +208,7 @@ impl<T> Topic<T> {
 
 		Ok(Topic {
 			name: name.to_string(),
-			qos,
+			qos: QosSettings::default(),
 			message_type: PhantomData,
 		})
 	}
@@ -296,6 +264,7 @@ mod test {
 		let all_services = ServicesConfig {
 			default_network: None,
 			default_wire_format: None,
+			default_qos: None,
 			service: services,
 		};
 
@@ -303,6 +272,7 @@ mod test {
 			system_uuid: None,
 			networks,
 			services: all_services,
+			qos: HashMap::new(),
 		};
 
 		Asb::new("my_service", config).unwrap()
@@ -336,7 +306,6 @@ mod test {
 
 		// Add the listener.
 		asb.add_status_listener(Arc::new(move |status| {
-			count.fetch_add(1, Ordering::Relaxed);
 			match status {
 				AsbConnStatus::Initializing => init.store(true, Ordering::Relaxed),
 				AsbConnStatus::Normal => norm.store(true, Ordering::Relaxed),
@@ -344,6 +313,7 @@ mod test {
 				AsbConnStatus::Inoperable => inop.store(true, Ordering::Relaxed),
 				AsbConnStatus::Failed => fail.store(true, Ordering::Relaxed),
 			};
+			count.fetch_add(1, Ordering::Relaxed);
 		}));
 		asb.set_connection_status(AsbConnStatus::Normal);
 		asb.set_connection_status(AsbConnStatus::Degraded);

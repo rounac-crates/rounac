@@ -4,7 +4,7 @@ pub mod amqp;
 
 use crate::{
 	Topic,
-	config::{AsbConfig, NetworkKind, WireFormat},
+	config::{AsbConfig, NetworkKind, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::amqp::{ChanCb, ConnCb},
 };
@@ -198,8 +198,8 @@ impl AsbConnection {
 					// to guarantee queue name is correct.
 					// TODO: Set auto_ack/no_ack depending on QoS (true for best effort, false for reliable).
 					let no_ack = match topic.qos.reliability {
-						crate::ReliabilityQos::BestEffort => true,
-						crate::ReliabilityQos::Reliable => false,
+						ReliabilityQos::BestEffort => true,
+						ReliabilityQos::Reliable => false,
 					};
 					let consume_args = BasicConsumeArguments::new(&res.0, "")
 						.auto_ack(no_ack)
