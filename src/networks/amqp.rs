@@ -15,10 +15,7 @@ use amqprs::{
 use async_trait::async_trait;
 use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
-use std::{
-	collections::HashMap,
-	sync::{Arc, OnceLock, RwLock},
-};
+use std::sync::Arc;
 use tokio::runtime::Handle;
 use toml::Value;
 
