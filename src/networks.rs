@@ -26,21 +26,25 @@ use std::{
 	sync::{Arc, Mutex},
 	time::Duration,
 };
+use tokio::sync::Notify;
 
 /// Manages the transport-specific data and lifetime.
 pub enum AsbNetMode {
-	Amqp(Arc<amqp::AmqpAsb>),
+	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
 	Null,
 }
 impl Drop for AsbNetMode {
 	fn drop(&mut self) {
 		match self {
-			AsbNetMode::Amqp(asb) => {
+			AsbNetMode::Amqp(asb, n) => {
 				asb.rt_handle.block_on(async {
 					// Close channel and connection.
 					_ = asb.chan.clone().close().await;
 					_ = asb.conn.clone().close().await;
 				});
+
+				// Notify
+				n.notify_waiters();
 			}
 			_ => {}
 		};
@@ -116,26 +120,20 @@ impl AsbConnection {
 				})?;
 
 				// Spawn background thread to drive the tokio runtime.
-				let conn_clone = conn.clone();
-				std::thread::spawn(move || {
-					rt.block_on(async {
-						// Yield while connection is still active.
-						// Connection gets dropped last so tokio runtime must live beyond that.
-						while conn_clone.is_open() {
-							// Yield then sleep to avoid hogging CPU and async time.
-							tokio::task::yield_now().await;
-							tokio::time::sleep(Duration::from_micros(50)).await;
-						}
-					})
-				});
+				let notifier = Arc::new(Notify::new());
+				let bg_notifier = notifier.clone();
+				std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
 
 				Ok(AsbConnection {
-					net: AsbNetMode::Amqp(Arc::new(amqp::AmqpAsb {
-						rt_handle,
-						conn,
-						chan,
-						exchange,
-					})),
+					net: AsbNetMode::Amqp(
+						Arc::new(amqp::AmqpAsb {
+							rt_handle,
+							conn,
+							chan,
+							exchange,
+						}),
+						notifier,
+					),
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
@@ -163,7 +161,7 @@ impl AsbConnection {
 		}?;
 
 		match &self.net {
-			AsbNetMode::Amqp(asb) => {
+			AsbNetMode::Amqp(asb, _) => {
 				// Create a queue for this topic
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
@@ -255,7 +253,7 @@ impl AsbConnection {
 		}?;
 
 		match &self.net {
-			AsbNetMode::Amqp(asb) => {
+			AsbNetMode::Amqp(asb, _) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
 				let topic_name = topic.name.clone();
 
