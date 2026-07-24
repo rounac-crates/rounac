@@ -1,7 +1,7 @@
 //! AMQPRS related utilities
 
 use crate::{
-	config::{NetworkConfig, NetworkKind, WireFormat},
+	config::{NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
 };
 use amqprs::{
@@ -68,7 +68,7 @@ pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
 	/// Shared with each reader, but readers only modify during clone and drop.
 	pub buffers: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
-	pub auto_ack: bool,
+	pub qos: QosSettings,
 }
 
 #[async_trait]
@@ -90,7 +90,7 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 		}
 
 		// Then if we need to ACK, do that.
-		if !self.auto_ack {
+		if self.qos.reliability == ReliabilityQos::Reliable {
 			let ack_args = BasicAckArguments::new(deliver.delivery_tag(), false);
 
 			// Try to ACK some number of times before giving up.
@@ -116,11 +116,11 @@ impl ConnectionCallback for ConnCb {
 		Ok(())
 	}
 
-	async fn blocked(&mut self, connection: &Connection, reason: String) {}
+	async fn blocked(&mut self, _: &Connection, _: String) {}
 
-	async fn unblocked(&mut self, connection: &Connection) {}
+	async fn unblocked(&mut self, _: &Connection) {}
 
-	async fn secret_updated(&mut self, connection: &Connection) {}
+	async fn secret_updated(&mut self, _: &Connection) {}
 }
 
 pub(crate) struct ChanCb;

@@ -193,7 +193,7 @@ impl AsbConnection {
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffers: all_senders.clone(),
-					auto_ack,
+					qos: topic.qos.clone(),
 				};
 
 				// Do all the actual network stuff here and save tag for deleting consumer.
