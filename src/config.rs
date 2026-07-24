@@ -45,6 +45,9 @@
 //! [networks.blackhole]
 //! kind = "null"
 //!
+//! ##
+//! ## WARNING: These settings are presently non-functional, but will be soon.
+//! ##
 //! [qos.blink_and_miss_it]
 //! # Optional buffer size. Defaults to 100.
 //! buffer = 1
