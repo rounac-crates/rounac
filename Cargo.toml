@@ -28,4 +28,4 @@ name = "basic_status_subscribe"
 
 [dev-dependencies]
 chrono = "0.4.45"
-rounac-uci = "0.0.0"
+rounac-uci = "0.0.1"
