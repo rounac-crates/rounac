@@ -121,12 +121,12 @@ impl Asb {
 	}
 
 	/// Register a function to be called whenever the status of this ASB changes.
-	pub fn add_status_listener(&self, fun: Arc<dyn AsbStatusListener>) -> u32 {
+	pub fn add_status_listener(&self, fun: impl AsbStatusListener + 'static) -> u32 {
 		// Add function to listeners vec.
 		let mut listeners = self.status_listeners.write().unwrap();
 		let id = rand::random();
-		let f = fun.clone();
-		listeners.push((id, fun));
+		let f = Arc::new(fun);
+		listeners.push((id, f.clone()));
 
 		// Call the function immediately with current status.
 		let status = self.get_connection_status();
@@ -305,7 +305,7 @@ mod test {
 		let fail = fail_hit.clone();
 
 		// Add the listener.
-		asb.add_status_listener(Arc::new(move |status| {
+		asb.add_status_listener(move |status| {
 			match status {
 				AsbConnStatus::Initializing => init.store(true, Ordering::Relaxed),
 				AsbConnStatus::Normal => norm.store(true, Ordering::Relaxed),
@@ -314,7 +314,7 @@ mod test {
 				AsbConnStatus::Failed => fail.store(true, Ordering::Relaxed),
 			};
 			count.fetch_add(1, Ordering::Relaxed);
-		}));
+		});
 		asb.set_connection_status(AsbConnStatus::Normal);
 		asb.set_connection_status(AsbConnStatus::Degraded);
 		asb.set_connection_status(AsbConnStatus::Inoperable);
