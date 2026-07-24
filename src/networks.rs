@@ -21,7 +21,6 @@ use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::{RingReceiver, RingSender};
 use serde::{Deserialize, Serialize};
 use std::{
-	collections::HashMap,
 	marker::PhantomData,
 	sync::{Arc, Mutex},
 	time::Duration,
@@ -227,23 +226,22 @@ impl AsbConnection {
 					all_senders,
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
-					callback_mode: false,
-					listeners: Mutex::new(HashMap::new()),
+					callback_handle: None,
+					listeners: Default::default(),
 					_asb: PhantomData,
 				})
 			}
 			AsbNetMode::Null => {
 				// Construct empty ring buffer since null does nothing.
-				let (prod, cons) = crossbeam_ring_channel::ring_bounded(0);
-				let all_senders = Arc::new(Mutex::new(vec![(0, prod)]));
+				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
 
 				Ok(AsbReader {
 					buffer: cons,
-					all_senders,
+					all_senders: Default::default(),
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Null),
-					callback_mode: false,
-					listeners: Mutex::new(HashMap::new()),
+					callback_handle: None,
+					listeners: Default::default(),
 					_asb: PhantomData,
 				})
 			}
@@ -301,8 +299,7 @@ impl AsbConnection {
 
 /// Provides messages received from the ASB through a polling interface.
 ///
-// TODO: Each reader can be responsible for its own set of listeners (probably
-//       still need a bg thread to auto-receive and call each listener).
+/// **IMPORTANT**: If the network type is "null" then every read will error.
 pub struct AsbReader<'a, T> {
 	buffer: RingReceiver<Arc<T>>,
 	/// Shared with consumer for this topic. `u32` is random to identify sender
@@ -312,18 +309,24 @@ pub struct AsbReader<'a, T> {
 	/// Arc so that any unsubscribes happen only after last reader drops.
 	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
-	// Option<JoinHandle<RingReceiver<T>>> - Pass RingReceiver back and forth, or just clone it.
-	callback_mode: bool,
+	callback_handle: Option<Arc<()>>,
 	/// All registered listeners keyed by a random number.
-	listeners: Mutex<HashMap<u32, Box<dyn Fn(&T) + Send + Sync>>>,
+	listeners: Arc<Mutex<Vec<(u32, Box<dyn Fn(&T) + Send>)>>>,
 	// Just used to tie lifetime of this object to the ASB.
 	_asb: PhantomData<&'a T>,
 }
 impl<'a, T> AsbReader<'a, T> {
+	fn callback_mode_error(&self) -> Result<(), CalError> {
+		match self.callback_handle.is_some() {
+			true => Err(CalError::ill_err(format!("Reader has active listeners"))),
+			false => Ok(()),
+		}
+	}
 	/// Read the next message from the buffer or block until there is one.
-	///
-	/// **IMPORTANT**: If the network type is "null" then this method will hang forever.
 	pub fn read(&self) -> Result<Arc<T>, CalError> {
+		// Error if in callback mode.
+		self.callback_mode_error()?;
+
 		// Do actual read.
 		self.buffer
 			.recv()
@@ -332,6 +335,9 @@ impl<'a, T> AsbReader<'a, T> {
 
 	/// Read the next message from the buffer or block until one is received or `timeout` is reached.
 	pub fn read_timeout(&self, timeout: Duration) -> Result<Option<Arc<T>>, CalError> {
+		// Error if in callback mode.
+		self.callback_mode_error()?;
+
 		// Do actual read.
 		match self.buffer.recv_timeout(timeout) {
 			Ok(m) => Ok(Some(m)),
@@ -346,6 +352,9 @@ impl<'a, T> AsbReader<'a, T> {
 
 	/// Read the next message from the buffer if there is one. Does not block.
 	pub fn try_read(&self) -> Result<Option<Arc<T>>, CalError> {
+		// Error if in callback mode.
+		self.callback_mode_error()?;
+
 		// Do actual read.
 		match self.buffer.try_recv() {
 			Ok(m) => Ok(Some(m)),
@@ -355,6 +364,71 @@ impl<'a, T> AsbReader<'a, T> {
 					"Reader closed unexpectedly".to_string(),
 				)),
 			},
+		}
+	}
+}
+impl<'a, T: Send + Sync + 'static> AsbReader<'a, T> {
+	/// Register a function to be called whenever a new message is received.
+	///
+	/// **IMPORTANT**: All listeners on this reader share a thread.
+	pub fn add_listener(&mut self, fun: impl Fn(&T) + Send + 'static) -> u32 {
+		// Add function to listeners vec.
+		let id = rand::random();
+		{
+			let mut listeners = self.listeners.lock().unwrap();
+			listeners.push((id, Box::new(fun)));
+		}
+
+		// Start background thread if we haven't already
+		let bg_listeners = self.listeners.clone();
+		let receiver = self.buffer.clone();
+		if self.callback_handle.is_none() {
+			let handle = Arc::new(());
+			self.callback_handle = Some(handle.clone());
+			std::thread::spawn(move || {
+				// While there are messages, receive them and call listeners.
+				// Using timeout so that we can verify this thread should remain active.
+				// This means that, at most, one message will be received and not given
+				// to the client at all.
+				loop {
+					// If we're the only Arc left, then stop thread.
+					if Arc::strong_count(&handle) == 1 {
+						break;
+					}
+
+					// Otherwise try to receive a message and call the listeners.
+					match receiver.recv_timeout(Duration::from_millis(250)) {
+						Ok(msg) => {
+							for l in bg_listeners.lock().unwrap().iter() {
+								l.1(&msg);
+							}
+						}
+						Err(RecvTimeoutError::Disconnected) => break,
+						_ => {}
+					}
+				}
+			});
+		}
+
+		// Return ID to user so they can remove listener later
+		id
+	}
+
+	/// Remove the listener identified with `id`, returning `true` if it exists.
+	pub fn remove_listener(&mut self, id: u32) -> bool {
+		let mut listeners = self.listeners.lock().unwrap();
+		if let Some(idx) = listeners.iter().position(|b| b.0 == id) {
+			_ = listeners.swap_remove(idx);
+
+			// If no more listeners, empty callback handle so bg thread will stop and
+			// reads can continue as normal.
+			if listeners.is_empty() {
+				_ = self.callback_handle.take();
+			}
+
+			true
+		} else {
+			false
 		}
 	}
 }
@@ -375,8 +449,8 @@ impl<'a, T> Clone for AsbReader<'a, T> {
 			all_senders: self.all_senders.clone(),
 			my_sender_id,
 			net: self.net.clone(),
-			callback_mode: false,
-			listeners: Mutex::new(HashMap::new()),
+			callback_handle: None,
+			listeners: Arc::new(Mutex::new(Vec::new())),
 			_asb: PhantomData,
 		}
 	}
