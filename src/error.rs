@@ -11,6 +11,8 @@ use std::{
 pub enum CalErrorKind {
 	/// Error pertaining to the ASB configuration.
 	Config,
+	/// Error indicating the desired action is disallowed by the CAL spec.
+	Illegal,
 	/// Wrapped [std::io::Error].
 	Io,
 	/// Error pertaining to a network connection.
@@ -36,6 +38,14 @@ impl CalError {
 	pub fn config_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Config,
+			data: Arc::from(Box::<dyn Error>::from(msg)),
+		}
+	}
+
+	/// Return a [CalError] with kind `Illegal`.
+	pub fn ill_err(msg: String) -> Self {
+		CalError {
+			kind: CalErrorKind::Network,
 			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
