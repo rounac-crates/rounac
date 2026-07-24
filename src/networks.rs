@@ -18,7 +18,7 @@ use amqprs::{
 	connection::Connection,
 };
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
-use crossbeam_ring_channel::RingReceiver;
+use crossbeam_ring_channel::{RingReceiver, RingSender};
 use serde::{Deserialize, Serialize};
 use std::{
 	collections::HashMap,
@@ -188,10 +188,12 @@ impl AsbConnection {
 				};
 
 				// Create the ring buffer for the reader and consumer.
+				// Buffer size is max(qos, 1) since size of 0 is invalid.
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer.max(1));
+				let all_senders = Arc::new(Mutex::new(vec![(0, prod)]));
 				let consumer = AmqpConsumer {
 					format: *wire_format,
-					buffer: prod,
+					buffers: all_senders.clone(),
 					auto_ack,
 				};
 
@@ -222,7 +224,9 @@ impl AsbConnection {
 
 				Ok(AsbReader {
 					buffer: cons,
-					net: AsbReaderNet::Amqp(asb.clone(), tag),
+					all_senders,
+					my_sender_id: 0,
+					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
 					_asb: PhantomData,
@@ -230,11 +234,14 @@ impl AsbConnection {
 			}
 			AsbNetMode::Null => {
 				// Construct empty ring buffer since null does nothing.
-				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(0);
+				let all_senders = Arc::new(Mutex::new(vec![(0, prod)]));
 
 				Ok(AsbReader {
 					buffer: cons,
-					net: AsbReaderNet::Null,
+					all_senders,
+					my_sender_id: 0,
+					net: Arc::new(AsbReaderNet::Null),
 					callback_mode: false,
 					listeners: Mutex::new(HashMap::new()),
 					_asb: PhantomData,
@@ -294,10 +301,16 @@ impl AsbConnection {
 
 /// Provides messages received from the ASB through a polling interface.
 ///
-/// **IMPORTANT**: If the network type is "null" then all read methods will error.
+// TODO: Each reader can be responsible for its own set of listeners (probably
+//       still need a bg thread to auto-receive and call each listener).
 pub struct AsbReader<'a, T> {
 	buffer: RingReceiver<Arc<T>>,
-	net: AsbReaderNet,
+	/// Shared with consumer for this topic. `u32` is random to identify sender
+	/// for this [AsbReader].
+	all_senders: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
+	my_sender_id: u32,
+	/// Arc so that any unsubscribes happen only after last reader drops.
+	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	// Option<JoinHandle<RingReceiver<T>>> - Pass RingReceiver back and forth, or just clone it.
 	callback_mode: bool,
@@ -308,6 +321,8 @@ pub struct AsbReader<'a, T> {
 }
 impl<'a, T> AsbReader<'a, T> {
 	/// Read the next message from the buffer or block until there is one.
+	///
+	/// **IMPORTANT**: If the network type is "null" then this method will hang forever.
 	pub fn read(&self) -> Result<Arc<T>, CalError> {
 		// Do actual read.
 		self.buffer
@@ -340,6 +355,41 @@ impl<'a, T> AsbReader<'a, T> {
 					"Reader closed unexpectedly".to_string(),
 				)),
 			},
+		}
+	}
+}
+impl<'a, T> Clone for AsbReader<'a, T> {
+	fn clone(&self) -> Self {
+		// Create the ring buffer
+		let (prod, cons) = crossbeam_ring_channel::ring_bounded(self.buffer.capacity());
+		let my_sender_id = rand::random();
+
+		// Add producer to shared vec
+		{
+			let mut buffers = self.all_senders.lock().unwrap();
+			buffers.push((my_sender_id, prod));
+		}
+
+		AsbReader {
+			buffer: cons,
+			all_senders: self.all_senders.clone(),
+			my_sender_id,
+			net: self.net.clone(),
+			callback_mode: false,
+			listeners: Mutex::new(HashMap::new()),
+			_asb: PhantomData,
+		}
+	}
+}
+impl<'a, T> Drop for AsbReader<'a, T> {
+	fn drop(&mut self) {
+		// Simply remove sender for this reader
+		{
+			let mut buffers = self.all_senders.lock().unwrap();
+			// This conditional should never fail, but do proper checking just in case.
+			if let Some(idx) = buffers.iter().position(|b| b.0 == self.my_sender_id) {
+				buffers.swap_remove(idx);
+			}
 		}
 	}
 }

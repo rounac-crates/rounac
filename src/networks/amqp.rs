@@ -15,7 +15,7 @@ use amqprs::{
 use async_trait::async_trait;
 use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 use toml::Value;
 
@@ -66,7 +66,8 @@ pub(crate) struct AmqpAsb {
 
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
-	pub buffer: RingSender<Arc<T>>,
+	/// Shared with each reader, but readers only modify during clone and drop.
+	pub buffers: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
 	pub auto_ack: bool,
 }
 
@@ -81,8 +82,11 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 	) {
 		// Deserialize message first so reader gets it
 		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
-			// Add to ring buffer
-			_ = self.buffer.send(Arc::new(msg));
+			// Send to all ring buffers
+			let arced: Arc<T> = Arc::new(msg);
+			for buffer in self.buffers.lock().unwrap().iter() {
+				_ = buffer.1.send(arced.clone());
+			}
 		}
 
 		// Then if we need to ACK, do that.
