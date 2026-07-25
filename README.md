@@ -64,7 +64,7 @@ fn main() {
 |---|---|---|---|
 | `CAL-005179` | N/A | Not C++ | N |
 | `CAL-005180` | N/A | Not Java | N |
-| `CAL-016015` | Y | Ensure multi-threading supported and all clients can communicate. | N |
+| `CAL-016015` | Y | Yes but it may require a network/broker connection. | Y |
 | `CAL-016024` | Y | Handled by message bindings | Y |
 | `CAL-016027` | Y | Handled by message bindings | Y |
 | `CAL-016028` | Y | Handled by message bindings | Y |
@@ -78,12 +78,12 @@ fn main() {
 | `CAL-005204` | Y | `Asb::new()` returns a `CalError` if there is an issue initializing. | Y |
 | `CAL-005208` | Y | Take a type parameter when first creating the topic. | N |
 | `CAL-005209` | Y | Client topics are mapped through various means to CAL topics. | Y |
-| `CAL-005210` | Maybe | Per-topic QoS (is this even possible with standard pub-sub connections?) | N |
+| `CAL-005210` | Y | Depends on the specific transport used, but supported. | Partial |
 | `CAL-016033` | Y | Handled by message bindings | Y |
 | `CAL-016035` | Partial | Message bindings utilize enums for abstract due to no polymorphism. | Partial |
 | `CAL-005254` | Y | Handled by message bindings | Y |
 | `CAL-005264` | Y | Handled by message bindings | Y |
-| `CAL-005267` | N | Choice types must be initialized with a valid choice. `Default` is not implemented. | N |
+| `CAL-005267` | N | Choices must be initialized with a valid choice. `Default` is not implemented. | N |
 | `CAL-016038` | N | Enums must be initialized with a valid variant. `Default` is not implemented. | N |
 | `CAL-005275` | Y | Standard Rust scoping/lifetime. | Y |
 | `CAL-005290` | Y | Standard `Option` semantics | Y |
@@ -96,25 +96,25 @@ fn main() {
 | `CAL-016043` | Y | See previous comment. | Y |
 | `CAL-005374` | Y | `Asb::create_reader()` | Y |
 | `CAL-005378` | Y | `AsbReader` is associated with the topic used to create it. | Y |
-| `CAL-005379` | Y | Either have a mode selector or separate constructors for callback vs polling. | N |
+| `CAL-005379` | Y | `AsbReader::add_listener()` and `AsbReader::remove_listener()` | Y |
 | `CAL-005380` | Y | `AsbReader::read()`, `AsbReader::read_timeout()`, `AsbReader::try_read()` | Y |
-| `CAL-005391` | Y | Trivially achievable. | N |
-| `CAL-005392` | Y | Utilize `Arc` to save space and permit flexibility. | N |
+| `CAL-005391` | Y | Trivially achievable. | Y |
+| `CAL-005392` | Y | Utilize `Arc` to save space and permit flexibility. | Y |
 | `CAL-005394` | Y | `AsbReader` resources are all initialized and ready when created. | Y |
 | `CAL-016044` | Y | `AsbReader` has background thread that stores messages in a buffer. | Y |
-| `CAL-016045` | Y | May just remove immediately depending where messages are stored. | N |
-| `CAL-016046` | Y | See `Arc` comment above. | N |
-| `CAL-005396` | Y | Trivially achievable. | N |
+| `CAL-016045` | Y | Technically the message is removed first but every listener will get it. | Y |
+| `CAL-016046` | Y | Listener callbacks get an immutable reference to the message. | Y |
+| `CAL-005396` | Y | `AsbReader::remove_listener()` | Y |
 | `CAL-016049` | Y | `AsbReader::read_timeout()` provides this functionality. | Y |
-| `CAL-016050` | Y | Return custom error or avoid entirely with separate readers for each type. | N |
+| `CAL-016050` | Y | Returns `CalError` with kind `Illegal` when this happens. | Y |
 | `CAL-016052` | Y | Message is removed from buffer to give to CAL client. | Y |
 | `CAL-005431` | Y | Trivially achievable. | N |
 | `CAL-005434` | Maybe | This seems like a broker/protocol specific capability, so may not support for every connection type. | N |
-| `CAL-016076` | Maybe | See previous comment. | N |
+| `CAL-016076` | Maybe | Messages are sent/received in the order given by the originating party. | Y |
 | `CAL-005437` | Y | Trivially achievable. | N |
 | `CAL-015746` | Y | Reader/Writer use topic QoS currently, but QoS isn't yet configurable. | Partial |
 | `CAL-005444` | Maybe | Buffer outgoing messages (if necessary). | N |
-| `CAL-005445` | Maybe | If outgoing are buffered (see previous). | N |
+| `CAL-005445` | Y | Overwriting ring buffers are used, but only reader uses currently. | Partial |
 | `CAL-016079` | Y | An overwriting ring buffer is used. | Y |
 | `CAL-016366` | Y | All logic to call listeners on change exists, but nothing changes status. | Partial |
 
