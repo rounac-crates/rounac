@@ -15,7 +15,10 @@ use amqprs::{
 use async_trait::async_trait;
 use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
+use std::{
+	sync::{Arc, Mutex},
+	time::Instant,
+};
 use tokio::runtime::Handle;
 use toml::Value;
 
@@ -69,6 +72,7 @@ pub struct AmqpConsumer<T> {
 	/// Shared with each reader, but readers only modify during clone and drop.
 	pub buffers: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
 	pub qos: QosSettings,
+	pub last_received: Option<Instant>,
 }
 
 #[async_trait]
@@ -80,16 +84,7 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 		_: BasicProperties,
 		data: Vec<u8>,
 	) {
-		// Deserialize message first so reader gets it
-		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
-			// Send to all ring buffers
-			let arced: Arc<T> = Arc::new(msg);
-			for buffer in self.buffers.lock().unwrap().iter() {
-				_ = buffer.1.send(arced.clone());
-			}
-		}
-
-		// Then if we need to ACK, do that.
+		// ACK first to broker knows we got the message.
 		if self.qos.reliability == ReliabilityQos::Reliable {
 			let ack_args = BasicAckArguments::new(deliver.delivery_tag(), false);
 
@@ -99,6 +94,28 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 				if chan.basic_ack(ack_args.clone()).await.is_ok() {
 					break;
 				}
+			}
+		}
+
+		// If `self.qos.time_based_filter` if set, check last receive time to avoid
+		// deserializing if we aren't due for another message.
+		if let Some(dur) = self.qos.time_based_filter {
+			// Checking time since last receive else setting last receive to now.
+			if let Some(last) = self.last_received {
+				if last.elapsed() < dur {
+					return;
+				}
+			} else {
+				self.last_received = Some(Instant::now());
+			}
+		}
+
+		// Deserialize message before sending to all readers.
+		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
+			// Send to all ring buffers
+			let arced: Arc<T> = Arc::new(msg);
+			for buffer in self.buffers.lock().unwrap().iter() {
+				_ = buffer.1.send(arced.clone());
 			}
 		}
 	}
