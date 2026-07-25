@@ -14,11 +14,10 @@ pub use crate::error::{CalError, CalErrorKind};
 use crate::networks::AsbConnection;
 pub use crate::networks::{AsbReader, AsbWriter};
 
-use config::{AsbConfig, QosSettings};
+use config::AsbConfig;
 use serde::{Deserialize, Serialize};
 use std::{
 	default::Default,
-	marker::PhantomData,
 	sync::{
 		Arc, RwLock,
 		atomic::{AtomicUsize, Ordering},
@@ -171,7 +170,7 @@ impl Asb {
 	/// Create a new [AsbReader] for the given [Topic].
 	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		&'a self,
-		topic: &Topic<T>,
+		topic: &str,
 	) -> Result<AsbReader<'a, T>, CalError> {
 		Ok(self
 			.connection
@@ -181,56 +180,11 @@ impl Asb {
 	/// Create a new [AsbWriter] for the given [Topic].
 	pub fn new_writer<'a, T: Serialize>(
 		&'a self,
-		topic: &Topic<T>,
+		topic: &str,
 	) -> Result<AsbWriter<'a, T>, CalError> {
 		Ok(self
 			.connection
 			.create_writer(topic, &self.config, &self.service_name)?)
-	}
-}
-
-/// CAL topic. A combination of name, QoS, and a message type.
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub struct Topic<T> {
-	name: String,
-	pub qos: QosSettings,
-	message_type: PhantomData<T>,
-}
-// TODO: Restrict T to be a valid type for sending (minimum serde, possibly specific message trait)
-impl<T> Topic<T> {
-	pub fn new(name: &str) -> Result<Self, CalError> {
-		// Restrict topic names to ASCII alphanumeric to minimize potential issues with ASB transports.
-		if name.contains(|c: char| !c.is_ascii_alphanumeric()) {
-			return Err(CalError::topic_err(format!(
-				"Topic \"{name}\" contains non-alphanumeric characters."
-			)));
-		}
-
-		Ok(Topic {
-			name: name.to_string(),
-			qos: QosSettings::default(),
-			message_type: PhantomData,
-		})
-	}
-
-	/// Return current name as [str].
-	pub fn name(&self) -> &str {
-		&self.name
-	}
-
-	/// Set a new name for this topic. If `new_name` is invalid, then this topic is not modified.
-	pub fn set_name(&mut self, new_name: &str) -> Result<(), CalError> {
-		if new_name.contains(|c: char| !c.is_ascii_alphanumeric()) {
-			return Err(CalError::topic_err(format!(
-				"Topic \"{new_name}\" contains non-alphanumeric characters."
-			)));
-		}
-
-		// Reuse string.
-		self.name.clear();
-		self.name.push_str(new_name);
-
-		Ok(())
 	}
 }
 

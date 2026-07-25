@@ -3,8 +3,7 @@
 pub mod amqp;
 
 use crate::{
-	Topic,
-	config::{AsbConfig, NetworkKind, ReliabilityQos, WireFormat},
+	config::{AsbConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::amqp::{ChanCb, ConnCb},
 };
@@ -143,7 +142,7 @@ impl AsbConnection {
 
 	pub fn create_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		&'a self,
-		topic: &Topic<T>,
+		topic: &str,
 		config: &AsbConfig,
 		svc_name: &str,
 	) -> Result<AsbReader<'a, T>, CalError> {
@@ -154,16 +153,20 @@ impl AsbConnection {
 			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
 			// Otherwise try to use the default.
 			_ => default_wire_format.ok_or(CalError::config_err(format!(
-				"No wire format specified for topic {} under service {svc_name}.",
-				&topic.name
+				"No wire format specified for topic {topic} under service {svc_name}."
 			))),
 		}?;
 
+		// Try to get QoS config for the given topic.
+		// TODO
+		let qos = QosSettings::default();
+
+		// Do the network-specific setup for a reader.
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
 				// Create a queue for this topic
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
-				let topic_name = topic.name.clone();
+				let topic_name = topic.to_owned();
 
 				// If no exchange specified use topic name, otherwise let the broker name
 				// it.
@@ -181,19 +184,20 @@ impl AsbConnection {
 					.finish();
 
 				// Determine ACK based on QoS. True means server assumes delivery.
-				let auto_ack = match topic.qos.reliability {
+				let auto_ack = match qos.reliability {
 					ReliabilityQos::BestEffort => true,
 					ReliabilityQos::Reliable => false,
 				};
 
 				// Create the ring buffer for the reader and consumer.
 				// Buffer size is max(qos, 1) since size of 0 is invalid.
-				let (prod, cons) = crossbeam_ring_channel::ring_bounded(topic.qos.buffer.max(1));
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
 				let all_senders = Arc::new(Mutex::new(vec![(0, prod)]));
 				let consumer = AmqpConsumer {
 					format: *wire_format,
 					buffers: all_senders.clone(),
-					qos: topic.qos.clone(),
+					qos,
+					last_received: None,
 				};
 
 				// Do all the actual network stuff here and save tag for deleting consumer.
@@ -250,7 +254,7 @@ impl AsbConnection {
 
 	pub fn create_writer<'a, T>(
 		&'a self,
-		topic: &Topic<T>,
+		topic: &str,
 		config: &AsbConfig,
 		svc_name: &str,
 	) -> Result<AsbWriter<'a, T>, CalError> {
@@ -261,15 +265,14 @@ impl AsbConnection {
 			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
 			// Otherwise try to use the default.
 			_ => default_wire_format.ok_or(CalError::config_err(format!(
-				"No wire format specified for topic {} under service {svc_name}.",
-				&topic.name
+				"No wire format specified for topic {topic} under service {svc_name}."
 			))),
 		}?;
 
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
 				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
-				let topic_name = topic.name.clone();
+				let topic_name = topic;
 
 				let exchange_name = asb
 					.exchange
@@ -279,7 +282,7 @@ impl AsbConnection {
 
 				// Create the publish parameters
 				let props = BasicProperties::default();
-				let args = BasicPublishArguments::new(exchange_name, &topic_name);
+				let args = BasicPublishArguments::new(exchange_name, topic_name);
 
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),

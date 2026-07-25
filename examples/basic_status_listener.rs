@@ -3,7 +3,7 @@
 //! This example will demonstrate a basic listener for `ServiceStatus` messages
 //! from an AMQP (RabbitMQ) network.
 
-use rounac::{Asb, Topic};
+use rounac::Asb;
 use rounac_uci::v2_5::elements::ServiceStatus;
 use std::time::Duration;
 
@@ -32,8 +32,7 @@ fn main() {
 	// Load the configuration and create the ASB + reader.
 	let config = CONFIG.parse().unwrap();
 	let asb = Asb::new(SVC_NAME, config).unwrap();
-	let topic = Topic::<ServiceStatus>::new("status").unwrap();
-	let mut reader = asb.new_reader(&topic).unwrap();
+	let mut reader = asb.new_reader::<ServiceStatus>("status").unwrap();
 
 	// How long to listen for
 	let listen_time = Duration::from_secs(10);

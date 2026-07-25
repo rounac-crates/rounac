@@ -19,8 +19,6 @@ pub enum CalErrorKind {
 	Network,
 	/// Error pertaining to (de)serialization of a message.
 	Serde,
-	/// Error pertaining to [Topic].
-	Topic,
 	/// An error not covered by another category.
 	Other,
 }
@@ -70,14 +68,6 @@ impl CalError {
 	pub fn serde_err(msg: String) -> Self {
 		CalError {
 			kind: CalErrorKind::Serde,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
-		}
-	}
-
-	/// Return a [CalError] with kind `Topic`.
-	pub fn topic_err(msg: String) -> Self {
-		CalError {
-			kind: CalErrorKind::Topic,
 			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
