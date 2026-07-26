@@ -498,11 +498,13 @@ impl Drop for AsbReaderNet {
 }
 
 /// Publishes messages to the ASB on the topic specified during construction.
+#[derive(Clone)]
 pub struct AsbWriter<T> {
 	net: AsbWriterNet,
 	format: WireFormat,
 	_asb: PhantomData<T>,
 }
+#[derive(Clone)]
 pub enum AsbWriterNet {
 	Amqp(Arc<amqp::AmqpAsb>, BasicProperties, BasicPublishArguments),
 	Null,
