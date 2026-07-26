@@ -185,33 +185,63 @@ impl AsbConnection {
 		// Check whether topic exists, and if so, ensure that `T` matches.
 		let counter = self.get_topic_ctr::<T>(topic)?;
 
-		// Check for the wire format.
-		let default_wire_format = config.services.default_wire_format.as_ref();
-		let wire_format = match config.services.service.get(svc_name) {
-			// If the service config has a wire format, use that.
-			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
-			// Otherwise try to use the default.
-			_ => default_wire_format.ok_or(CalError::config_err(format!(
-				"No wire format specified for topic {topic} under service {svc_name}."
-			))),
-		}?;
+		// Get the config for this service
+		let service_cfg = config.services.service.get(svc_name);
 
-		// Try to get QoS config for the given topic.
-		// TODO
-		let qos = QosSettings::default();
+		// Check for the wire format.
+		let wire_format = service_cfg
+			.and_then(|cfg| {
+				cfg.wire_format
+					.as_ref()
+					.or(config.services.default_wire_format.as_ref())
+			})
+			.ok_or(CalError::config_err(format!(
+				"No wire format specified for topic {topic} under service {svc_name}."
+			)))?;
+
+		// Get the QoS config for `topic`, or use the default.
+		let qos = service_cfg
+			.and_then(|cfg| {
+				// Try to get the a QoS name to lookup.
+				cfg.topics
+					.get(topic)
+					.and_then(|tcfg| tcfg.qos.as_ref())
+					// otherwise use the service-level qos
+					.or(cfg.qos.as_ref())
+					// otherwise use the default
+					.or(config.services.default_qos.as_ref())
+			})
+			// Map name to actual [QosSettings], error if it's not in the config.
+			// Use the default QoS otherwise.
+			.map_or(Ok(Default::default()), |name| {
+				config
+					.qos
+					.get(name)
+					.map(|q| *q)
+					.ok_or(CalError::config_err(format!(
+						"Could not find QoS settings for {name}"
+					)))
+			})?;
+
+		// Get the topic name for the bus.
+		let topic_name = service_cfg
+			.and_then(|cfg| {
+				// Try to get the bus topic
+				cfg.topics
+					.get(topic)
+					.and_then(|tcfg| tcfg.qos.as_ref())
+					.map(|s| s.as_str())
+			})
+			.unwrap_or(topic);
 
 		// Do the network-specific setup for a reader.
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
-				// Create a queue for this topic
-				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
-				let topic_name = topic.to_owned();
-
 				// If no exchange specified use topic name, otherwise let the broker name
 				// it.
 				let queue_name = match asb.exchange.is_some() {
 					true => "",
-					false => topic_name.as_str(),
+					false => topic_name,
 				};
 
 				// Prepare declare queue args.
@@ -254,7 +284,7 @@ impl AsbConnection {
 					// If an exchange is specified, bind queue to it.
 					// TODO: Is QoS expiration, set `x-message-ttl` to millis
 					if let Some(ref ex) = asb.exchange {
-						let args = QueueBindArguments::new(&res.0, &ex, &topic_name);
+						let args = QueueBindArguments::new(&res.0, &ex, topic_name);
 						asb.chan.queue_bind(args).await?;
 					}
 
@@ -300,22 +330,33 @@ impl AsbConnection {
 		// Check whether topic exists, and if so, ensure that `T` matches.
 		let counter = self.get_topic_ctr::<T>(topic)?;
 
+		// Get the config for this service
+		let service_cfg = config.services.service.get(svc_name);
+
 		// Check for the wire format.
-		let default_wire_format = config.services.default_wire_format.as_ref();
-		let wire_format = match config.services.service.get(svc_name) {
-			// If the service config has a wire format, use that.
-			Some(cfg) if cfg.wire_format.is_some() => Ok(cfg.wire_format.as_ref().unwrap()),
-			// Otherwise try to use the default.
-			_ => default_wire_format.ok_or(CalError::config_err(format!(
+		let wire_format = service_cfg
+			.and_then(|cfg| {
+				cfg.wire_format
+					.as_ref()
+					.or(config.services.default_wire_format.as_ref())
+			})
+			.ok_or(CalError::config_err(format!(
 				"No wire format specified for topic {topic} under service {svc_name}."
-			))),
-		}?;
+			)))?;
+
+		// Get the topic name for the bus.
+		let topic_name = service_cfg
+			.and_then(|cfg| {
+				// Try to get the bus topic
+				cfg.topics
+					.get(topic)
+					.and_then(|tcfg| tcfg.qos.as_ref())
+					.map(|s| s.as_str())
+			})
+			.unwrap_or(topic);
 
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
-				// TODO: Check config for topic prefix and adjust `topic_name` accordingly.
-				let topic_name = topic;
-
 				let exchange_name = asb
 					.exchange
 					.as_ref()
