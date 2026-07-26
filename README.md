@@ -111,7 +111,7 @@ fn main() {
 | `CAL-005431` | Y | Messages received within interval may be acknowledged per QoS, but are dropped. | Y |
 | `CAL-005434` | Y* | Broker/protocol specific, possibly configuration-dependent too. | Y* |
 | `CAL-016076` | Y* | Broker/protocol specific, but messages are sent/received in the order given. | Y* |
-| `CAL-005437` | Y | Trivially achievable. | N |
+| `CAL-005437` | Y | `AsbReader` will ignore and discard any messages past expiration. | Y |
 | `CAL-015746` | Y | Reader/Writer use topic QoS currently, but QoS isn't yet configurable. | Partial |
 | `CAL-005444` | Maybe | Buffer outgoing messages (if necessary). | N |
 | `CAL-005445` | Y | Overwriting ring buffers are used, but only reader uses currently. | Partial |
