@@ -140,12 +140,12 @@ impl AsbConnection {
 		}
 	}
 
-	pub fn create_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
-		&'a self,
+	pub fn create_reader<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		&self,
 		topic: &str,
 		config: &AsbConfig,
 		svc_name: &str,
-	) -> Result<AsbReader<'a, T>, CalError> {
+	) -> Result<AsbReader<T>, CalError> {
 		// Check for the wire format first
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
@@ -232,7 +232,6 @@ impl AsbConnection {
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
 					callback_handle: None,
 					listeners: Default::default(),
-					_asb: PhantomData,
 				})
 			}
 			AsbNetMode::Null => {
@@ -246,18 +245,17 @@ impl AsbConnection {
 					net: Arc::new(AsbReaderNet::Null),
 					callback_handle: None,
 					listeners: Default::default(),
-					_asb: PhantomData,
 				})
 			}
 		}
 	}
 
-	pub fn create_writer<'a, T>(
-		&'a self,
+	pub fn create_writer<T>(
+		&self,
 		topic: &str,
 		config: &AsbConfig,
 		svc_name: &str,
-	) -> Result<AsbWriter<'a, T>, CalError> {
+	) -> Result<AsbWriter<T>, CalError> {
 		// Check for the wire format first
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
@@ -303,7 +301,7 @@ impl AsbConnection {
 /// Provides messages received from the ASB through a polling interface.
 ///
 /// **IMPORTANT**: If the network type is "null" then every read will error.
-pub struct AsbReader<'a, T> {
+pub struct AsbReader<T> {
 	buffer: RingReceiver<Arc<T>>,
 	/// Shared with consumer for this topic. `u32` is random to identify sender
 	/// for this [AsbReader].
@@ -315,10 +313,8 @@ pub struct AsbReader<'a, T> {
 	callback_handle: Option<Arc<()>>,
 	/// All registered listeners keyed by a random number.
 	listeners: Arc<Mutex<Vec<(u32, Box<dyn Fn(&T) + Send>)>>>,
-	// Just used to tie lifetime of this object to the ASB.
-	_asb: PhantomData<&'a T>,
 }
-impl<'a, T> AsbReader<'a, T> {
+impl<T> AsbReader<T> {
 	fn callback_mode_error(&self) -> Result<(), CalError> {
 		match self.callback_handle.is_some() {
 			true => Err(CalError::ill_err(format!("Reader has active listeners"))),
@@ -370,7 +366,7 @@ impl<'a, T> AsbReader<'a, T> {
 		}
 	}
 }
-impl<'a, T: Send + Sync + 'static> AsbReader<'a, T> {
+impl<T: Send + Sync + 'static> AsbReader<T> {
 	/// Register a function to be called whenever a new message is received.
 	///
 	/// **IMPORTANT**: All listeners on this reader share a thread.
@@ -435,7 +431,7 @@ impl<'a, T: Send + Sync + 'static> AsbReader<'a, T> {
 		}
 	}
 }
-impl<'a, T> Clone for AsbReader<'a, T> {
+impl<T> Clone for AsbReader<T> {
 	fn clone(&self) -> Self {
 		// Create the ring buffer
 		let (prod, cons) = crossbeam_ring_channel::ring_bounded(self.buffer.capacity());
@@ -454,11 +450,10 @@ impl<'a, T> Clone for AsbReader<'a, T> {
 			net: self.net.clone(),
 			callback_handle: None,
 			listeners: Arc::new(Mutex::new(Vec::new())),
-			_asb: PhantomData,
 		}
 	}
 }
-impl<'a, T> Drop for AsbReader<'a, T> {
+impl<T> Drop for AsbReader<T> {
 	fn drop(&mut self) {
 		// Simply remove sender for this reader
 		{
@@ -490,16 +485,16 @@ impl Drop for AsbReaderNet {
 }
 
 /// Publishes messages to the ASB on the topic specified during construction.
-pub struct AsbWriter<'a, T> {
+pub struct AsbWriter<T> {
 	net: AsbWriterNet,
 	format: WireFormat,
-	_asb: PhantomData<&'a T>,
+	_asb: PhantomData<T>,
 }
 pub enum AsbWriterNet {
 	Amqp(Arc<amqp::AmqpAsb>, BasicProperties, BasicPublishArguments),
 	Null,
 }
-impl<'a, T: Serialize> AsbWriter<'a, T> {
+impl<T: Serialize> AsbWriter<T> {
 	/// Publishes `msg` to the topic specified in [create_writer()](AsbConnection::create_writer).
 	pub fn write(&self, msg: &T) -> Result<(), CalError> {
 		match &self.net {

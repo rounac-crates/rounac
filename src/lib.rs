@@ -171,17 +171,14 @@ impl Asb {
 	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		&'a self,
 		topic: &str,
-	) -> Result<AsbReader<'a, T>, CalError> {
+	) -> Result<AsbReader<T>, CalError> {
 		Ok(self
 			.connection
 			.create_reader(topic, &self.config, &self.service_name)?)
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
-	pub fn new_writer<'a, T: Serialize>(
-		&'a self,
-		topic: &str,
-	) -> Result<AsbWriter<'a, T>, CalError> {
+	pub fn new_writer<'a, T: Serialize>(&'a self, topic: &str) -> Result<AsbWriter<T>, CalError> {
 		Ok(self
 			.connection
 			.create_writer(topic, &self.config, &self.service_name)?)
