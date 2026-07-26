@@ -70,7 +70,7 @@ pub(crate) struct AmqpAsb {
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
 	/// Shared with each reader, but readers only modify during clone and drop.
-	pub buffers: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
+	pub buffers: Arc<Mutex<Vec<(u32, RingSender<(Instant, Arc<T>)>)>>>,
 	pub qos: QosSettings,
 	pub last_received: Option<Instant>,
 }
@@ -114,8 +114,9 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
 			// Send to all ring buffers
 			let arced: Arc<T> = Arc::new(msg);
+			let now = Instant::now();
 			for buffer in self.buffers.lock().unwrap().iter() {
-				_ = buffer.1.send(arced.clone());
+				_ = buffer.1.send((now, arced.clone()));
 			}
 		}
 	}

@@ -4,7 +4,7 @@ pub mod amqp;
 mod utils;
 
 use crate::{
-	config::{AsbConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
+	config::{AsbConfig, NetworkKind, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::amqp::{ChanCb, ConnCb},
 	networks::utils::PossessCtr,
@@ -26,7 +26,7 @@ use std::{
 	collections::{HashMap, hash_map},
 	marker::PhantomData,
 	sync::{Arc, Mutex},
-	time::Duration,
+	time::{Duration, Instant},
 };
 use tokio::sync::Notify;
 
@@ -296,6 +296,7 @@ impl AsbConnection {
 
 				Ok(AsbReader {
 					buffer: cons,
+					expiration: qos.expiration,
 					all_senders,
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
@@ -310,6 +311,7 @@ impl AsbConnection {
 
 				Ok(AsbReader {
 					buffer: cons,
+					expiration: qos.expiration,
 					all_senders: Default::default(),
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Null),
@@ -402,17 +404,23 @@ impl<T, F: Fn(&T) + Send + 'static> AsbListener<T> for F {
 ///
 /// **IMPORTANT**: If the network type is "null" then every read will error.
 pub struct AsbReader<T> {
-	buffer: RingReceiver<Arc<T>>,
+	/// The buffer this reader reads from.
+	buffer: RingReceiver<(Instant, Arc<T>)>,
+	/// Optional expiration time after which older messages should be discarded.
+	expiration: Option<Duration>,
 	/// Shared with consumer for this topic. `u32` is random to identify sender
 	/// for this [AsbReader].
-	all_senders: Arc<Mutex<Vec<(u32, RingSender<Arc<T>>)>>>,
+	all_senders: Arc<Mutex<Vec<(u32, RingSender<(Instant, Arc<T>)>)>>>,
 	my_sender_id: u32,
 	/// Arc so that any unsubscribes happen only after last reader drops.
 	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
-	callback_handle: Option<Arc<()>>,
+	// TODO: Consider refactoring to utilize a swapping RingSender to allow bg
+	//       thread to just call [recv] rather than [recv_timeout].
+	callback_handle: Option<PossessCtr>,
 	/// All registered listeners keyed by a random number.
 	listeners: Arc<Mutex<Vec<(u32, Box<dyn AsbListener<T>>)>>>,
+	/// Not used, simply holds so [AsbConnection] can track topic usage.
 	counter: PossessCtr,
 }
 impl<T> AsbReader<T> {
@@ -427,10 +435,25 @@ impl<T> AsbReader<T> {
 		// Error if in callback mode.
 		self.callback_mode_error()?;
 
+		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+
 		// Do actual read.
-		self.buffer
-			.recv()
-			.map_err(|_| CalError::other_err("Reader closed unexpectedly".to_string()))
+		if let Some(expiration) = self.expiration {
+			loop {
+				// Try to receive message
+				let Ok((t, msg)) = self.buffer.recv() else {
+					return Err(err);
+				};
+
+				// If within the expiration window, then ok to return message.
+				if t.elapsed() <= expiration {
+					return Ok(msg);
+				}
+			}
+		} else {
+			// Receive and ignore timestamp.
+			self.buffer.recv().map(|(_, m)| m).map_err(|_| err)
+		}
 	}
 
 	/// Read the next message from the buffer or block until one is received or `timeout` is reached.
@@ -438,15 +461,44 @@ impl<T> AsbReader<T> {
 		// Error if in callback mode.
 		self.callback_mode_error()?;
 
-		// Do actual read.
-		match self.buffer.recv_timeout(timeout) {
-			Ok(m) => Ok(Some(m)),
-			Err(e) => match e {
-				RecvTimeoutError::Timeout => Ok(None),
-				_ => Err(CalError::other_err(
-					"Reader closed unexpectedly".to_string(),
-				)),
-			},
+		// The error to return if the buffer is closed.
+		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+
+		// Split logic depending on whether there is an expiration check.
+		if let Some(expiration) = self.expiration {
+			let start = Instant::now();
+			let mut remaining = timeout;
+
+			while !remaining.is_zero() {
+				match self.buffer.recv_timeout(remaining) {
+					Ok((t, msg)) => {
+						// If within the expiration window, then ok to return message.
+						if t.elapsed() <= expiration {
+							return Ok(Some(msg));
+						} else {
+							remaining = timeout.saturating_sub(start.elapsed());
+						}
+					}
+					// If timeout, we should return without error. Else return error.
+					Err(e) => match e {
+						RecvTimeoutError::Timeout => break,
+						_ => return Err(err),
+					},
+				};
+			}
+
+			Ok(None)
+		} else {
+			// If no expiration, ignore the timestamp and just return next message.
+			match self.buffer.recv_timeout(timeout) {
+				Ok(m) => Ok(Some(m.1)),
+				Err(e) => match e {
+					RecvTimeoutError::Timeout => Ok(None),
+					_ => Err(CalError::other_err(
+						"Reader closed unexpectedly".to_string(),
+					)),
+				},
+			}
 		}
 	}
 
@@ -455,15 +507,35 @@ impl<T> AsbReader<T> {
 		// Error if in callback mode.
 		self.callback_mode_error()?;
 
-		// Do actual read.
-		match self.buffer.try_recv() {
-			Ok(m) => Ok(Some(m)),
-			Err(e) => match e {
-				TryRecvError::Empty => Ok(None),
-				_ => Err(CalError::other_err(
-					"Reader closed unexpectedly".to_string(),
-				)),
-			},
+		// The error to return if the buffer is closed.
+		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+
+		// Split logic depending on whether there is an expiration check.
+		if let Some(expiration) = self.expiration {
+			loop {
+				match self.buffer.try_recv() {
+					Ok((t, msg)) => {
+						// If within the expiration window, then ok to return message.
+						if t.elapsed() <= expiration {
+							return Ok(Some(msg));
+						}
+					}
+					// If timeout, we should return without error. Else return error.
+					Err(e) => match e {
+						TryRecvError::Empty => return Ok(None),
+						_ => return Err(err),
+					},
+				};
+			}
+		} else {
+			// If no expiration, ignore the timestamp and just return next message.
+			match self.buffer.try_recv() {
+				Ok(m) => Ok(Some(m.1)),
+				Err(e) => match e {
+					TryRecvError::Empty => Ok(None),
+					_ => Err(err),
+				},
+			}
 		}
 	}
 }
@@ -482,29 +554,56 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 		// Start background thread if we haven't already
 		let bg_listeners = self.listeners.clone();
 		let receiver = self.buffer.clone();
+		let expire = self.expiration;
 		if self.callback_handle.is_none() {
-			let handle = Arc::new(());
+			let handle = PossessCtr::new();
 			self.callback_handle = Some(handle.clone());
 			std::thread::spawn(move || {
-				// While there are messages, receive them and call listeners.
-				// Using timeout so that we can verify this thread should remain active.
-				// This means that, at most, one message will be received and not given
-				// to the client at all.
-				loop {
-					// If we're the only Arc left, then stop thread.
-					if Arc::strong_count(&handle) == 1 {
-						break;
-					}
+				// TODO: Do some basic profiling to find a good value for this.
+				//       or do refactor described above in [AsbReader].
+				const RECV_TMOUT: Duration = Duration::from_millis(100);
 
-					// Otherwise try to receive a message and call the listeners.
-					match receiver.recv_timeout(Duration::from_millis(250)) {
-						Ok(msg) => {
-							for l in bg_listeners.lock().unwrap().iter_mut() {
-								l.1.on_msg(&msg);
-							}
+				// Have conditional outside of loop since this can be a very hot loop.
+				if let Some(expiration) = expire {
+					loop {
+						// When reader drops its counter, this will trigger to stop the loop.
+						if handle.is_unique() {
+							break;
 						}
-						Err(RecvTimeoutError::Disconnected) => break,
-						_ => {}
+
+						// Receive on timeout so above conditional is checked periodically.
+						match receiver.recv_timeout(RECV_TMOUT) {
+							Ok((t, msg)) => {
+								if t.elapsed() <= expiration {
+									for l in bg_listeners.lock().unwrap().iter_mut() {
+										l.1.on_msg(&msg);
+									}
+								}
+							}
+							// If disconnected break loop.
+							Err(RecvTimeoutError::Disconnected) => break,
+							_ => {}
+						}
+					}
+				} else {
+					loop {
+						// When reader drops its counter, this will trigger to stop the loop.
+						if handle.is_unique() {
+							println!("Background thread stopping!");
+							break;
+						}
+
+						// Receive on timeout so above conditional is checked periodically.
+						match receiver.recv_timeout(RECV_TMOUT) {
+							Ok((_, msg)) => {
+								for l in bg_listeners.lock().unwrap().iter_mut() {
+									l.1.on_msg(&msg);
+								}
+							}
+							// If disconnected break loop.
+							Err(RecvTimeoutError::Disconnected) => break,
+							_ => {}
+						}
 					}
 				}
 			});
@@ -546,6 +645,7 @@ impl<T> Clone for AsbReader<T> {
 
 		AsbReader {
 			buffer: cons,
+			expiration: self.expiration,
 			all_senders: self.all_senders.clone(),
 			my_sender_id,
 			net: self.net.clone(),
