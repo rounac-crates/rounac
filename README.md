@@ -76,7 +76,7 @@ fn main() {
 | `CAL-005202` | Y | Each `Asb::new()` returns a wholly separate instance. | Y |
 | `CAL-005203` | Y | System and service UUIDs available. Others not yet. | Partial |
 | `CAL-005204` | Y | `Asb::new()` returns a `CalError` if there is an issue initializing. | Y |
-| `CAL-005208` | Y | Take a type parameter when first creating the topic. | N |
+| `CAL-005208` | Y | A topic can take any type so long as every reader/writer uses the same type. | Y |
 | `CAL-005209` | Y | Client topics are mapped through various means to CAL topics. | Y |
 | `CAL-005210` | Y | Depends on the specific transport used, but supported. | Partial |
 | `CAL-016033` | Y | Handled by message bindings | Y |
