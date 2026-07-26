@@ -178,7 +178,10 @@ impl Asb {
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
-	pub fn new_writer<'a, T: Serialize>(&'a self, topic: &str) -> Result<AsbWriter<T>, CalError> {
+	pub fn new_writer<'a, T: Serialize + 'static>(
+		&'a self,
+		topic: &str,
+	) -> Result<AsbWriter<T>, CalError> {
 		Ok(self
 			.connection
 			.create_writer(topic, &self.config, &self.service_name)?)

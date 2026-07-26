@@ -1,11 +1,13 @@
 //! Module for the network related types.
 
 pub mod amqp;
+mod utils;
 
 use crate::{
 	config::{AsbConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::amqp::{ChanCb, ConnCb},
+	networks::utils::PossessCtr,
 };
 use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
@@ -20,6 +22,8 @@ use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::{RingReceiver, RingSender};
 use serde::{Deserialize, Serialize};
 use std::{
+	any,
+	collections::{HashMap, hash_map},
 	marker::PhantomData,
 	sync::{Arc, Mutex},
 	time::Duration,
@@ -51,10 +55,11 @@ impl Drop for AsbNetMode {
 
 /// Manages and maintains a single ASB connection.
 // TODO: Status var shared with background thread.
-// TODO: Also figure out how to track reader/writer topics. Is `Arc<Mutex<...>>` good enough?
 pub struct AsbConnection {
 	/// The transport-specific things.
 	net: AsbNetMode,
+	/// Map of topic name to (count, topic_type). Mutex for flexibility.
+	topics: Mutex<HashMap<String, (PossessCtr, any::TypeId)>>,
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -132,11 +137,42 @@ impl AsbConnection {
 						}),
 						notifier,
 					),
+					topics: Default::default(),
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
+				topics: Default::default(),
 			}),
+		}
+	}
+
+	fn get_topic_ctr<T: 'static>(&self, topic: &str) -> Result<PossessCtr, CalError> {
+		// Lock the map first
+		let mut map = self.topics.lock().unwrap();
+		let entry = map.entry(topic.to_owned());
+
+		// Check entry and return counter if valid, otherwise return error.
+		match entry {
+			hash_map::Entry::Occupied(o) => {
+				let (count, ty) = o.get();
+
+				// If the type does not match, then it will only be allowed if counter is
+				// unique.
+				if any::TypeId::of::<T>() != *ty && !count.is_unique() {
+					return Err(CalError::ill_err(
+						"Type mismatch with existing readers".to_owned(),
+					));
+				}
+
+				// Valid reader, so clone the counter for the reader.
+				Ok(count.clone())
+			}
+			hash_map::Entry::Vacant(v) => {
+				let counter = PossessCtr::new();
+				v.insert((counter.clone(), any::TypeId::of::<T>()));
+				Ok(counter)
+			}
 		}
 	}
 
@@ -146,7 +182,10 @@ impl AsbConnection {
 		config: &AsbConfig,
 		svc_name: &str,
 	) -> Result<AsbReader<T>, CalError> {
-		// Check for the wire format first
+		// Check whether topic exists, and if so, ensure that `T` matches.
+		let counter = self.get_topic_ctr::<T>(topic)?;
+
+		// Check for the wire format.
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
 			// If the service config has a wire format, use that.
@@ -232,6 +271,7 @@ impl AsbConnection {
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
 					callback_handle: None,
 					listeners: Default::default(),
+					counter,
 				})
 			}
 			AsbNetMode::Null => {
@@ -245,18 +285,22 @@ impl AsbConnection {
 					net: Arc::new(AsbReaderNet::Null),
 					callback_handle: None,
 					listeners: Default::default(),
+					counter,
 				})
 			}
 		}
 	}
 
-	pub fn create_writer<T>(
+	pub fn create_writer<T: 'static>(
 		&self,
 		topic: &str,
 		config: &AsbConfig,
 		svc_name: &str,
 	) -> Result<AsbWriter<T>, CalError> {
-		// Check for the wire format first
+		// Check whether topic exists, and if so, ensure that `T` matches.
+		let counter = self.get_topic_ctr::<T>(topic)?;
+
+		// Check for the wire format.
 		let default_wire_format = config.services.default_wire_format.as_ref();
 		let wire_format = match config.services.service.get(svc_name) {
 			// If the service config has a wire format, use that.
@@ -285,6 +329,7 @@ impl AsbConnection {
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),
 					format: *wire_format,
+					counter,
 					_asb: PhantomData,
 				})
 			}
@@ -292,6 +337,7 @@ impl AsbConnection {
 				net: AsbWriterNet::Null,
 				// No default for [WireFormat] so just picking Xml since it's the first.
 				format: WireFormat::Xml,
+				counter,
 				_asb: PhantomData,
 			}),
 		}
@@ -326,6 +372,7 @@ pub struct AsbReader<T> {
 	callback_handle: Option<Arc<()>>,
 	/// All registered listeners keyed by a random number.
 	listeners: Arc<Mutex<Vec<(u32, Box<dyn AsbListener<T>>)>>>,
+	counter: PossessCtr,
 }
 impl<T> AsbReader<T> {
 	fn callback_mode_error(&self) -> Result<(), CalError> {
@@ -463,6 +510,7 @@ impl<T> Clone for AsbReader<T> {
 			net: self.net.clone(),
 			callback_handle: None,
 			listeners: Arc::new(Mutex::new(Vec::new())),
+			counter: self.counter.clone(),
 		}
 	}
 }
@@ -502,6 +550,7 @@ impl Drop for AsbReaderNet {
 pub struct AsbWriter<T> {
 	net: AsbWriterNet,
 	format: WireFormat,
+	counter: PossessCtr,
 	_asb: PhantomData<T>,
 }
 #[derive(Clone)]
