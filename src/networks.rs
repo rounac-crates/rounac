@@ -415,8 +415,6 @@ pub struct AsbReader<T> {
 	/// Arc so that any unsubscribes happen only after last reader drops.
 	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
-	// TODO: Consider refactoring to utilize a swapping RingSender to allow bg
-	//       thread to just call [recv] rather than [recv_timeout].
 	callback_handle: Option<PossessCtr>,
 	/// All registered listeners keyed by a random number.
 	listeners: Arc<Mutex<Vec<(u32, Box<dyn AsbListener<T>>)>>>,
@@ -543,6 +541,36 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 	/// Register a function to be called whenever a new message is received.
 	///
 	/// **IMPORTANT**: All listeners on this reader share a thread.
+	// Implementation notes:
+	//
+	// Using `recv_timeout` to ensure the bg thread stops in a timely manner isn't
+	// the prettiest solution, however it currently seems the most sensible. Below
+	// are two alternatives considered, though both are similar in implementation.
+	//
+	// # Alternative 1 (swapping ring buffers)
+	// This approach would involve the creation of a new ringbuffer whose sender
+	// replaces the current reader's sender, and whose receiver goes to the
+	// thread. When [remove_listener] goes to stop the thread, it simply undoes
+	// this swap and drops the bg thread sender. This would allow the bg thread to
+	// use [recv] in a loop with no extra conditionals, since it will error as
+	// soon as the sender is dropped in [remove_listener]. However, this would
+	// also mean that some messages may be lost if they were in the bg thread's
+	// buffer before they could be dispatched. If [remove_listener] were to read
+	// and forward all remaining messages to the reader's own buffer, it would
+	// prolong the time that the [Mutex] for `all_senders` is held which is not
+	// desirable. In the alternate case that it releases the lock to do so, some
+	// messages may be missed entirely; if the reader added its sender back before
+	// copying, message ordering would be broken.
+	//
+	// # Alternative 2 (additional ring buffer)
+	// This approach is a simpler version of alternative 1, because it would take
+	// the new ringbuffer and simply add the sender to the `all_senders` list.
+	// This avoids all of the message loss problems, however it arguably breaks
+	// the ordering again because there are now messages in the reader's buffer
+	// that were already processed by the bg thread, leading to duplicates until
+	// they are read/overwritten. This also obviously increases the length of
+	// `all_senders`, potentially up to double if every reader is used with
+	// listeners.
 	pub fn add_listener(&mut self, fun: impl AsbListener<T>) -> u32 {
 		// Add function to listeners vec.
 		let id = rand::random();
@@ -560,7 +588,8 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 			self.callback_handle = Some(handle.clone());
 			std::thread::spawn(move || {
 				// TODO: Do some basic profiling to find a good value for this.
-				//       or do refactor described above in [AsbReader].
+				//       Shorter makes loop more "busy" but gives better reaction in cases
+				//       of infrequent message reception, longer does the opposite.
 				const RECV_TMOUT: Duration = Duration::from_millis(100);
 
 				// Have conditional outside of loop since this can be a very hot loop.
