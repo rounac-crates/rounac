@@ -108,9 +108,9 @@ fn main() {
 | `CAL-016049` | Y | `AsbReader::read_timeout()` provides this functionality. | Y |
 | `CAL-016050` | Y | Returns `CalError` with kind `Illegal` when this happens. | Y |
 | `CAL-016052` | Y | Message is removed from buffer to give to CAL client. | Y |
-| `CAL-005431` | Y | Trivially achievable. | N |
-| `CAL-005434` | Maybe | This seems like a broker/protocol specific capability, so may not support for every connection type. | N |
-| `CAL-016076` | Maybe | Messages are sent/received in the order given by the originating party. | Y |
+| `CAL-005431` | Y | Messages received within interval may be acknowledged per QoS, but are dropped. | Y |
+| `CAL-005434` | Y* | Broker/protocol specific, possibly configuration-dependent too. | Y* |
+| `CAL-016076` | Y* | Broker/protocol specific, but messages are sent/received in the order given. | Y* |
 | `CAL-005437` | Y | Trivially achievable. | N |
 | `CAL-015746` | Y | Reader/Writer use topic QoS currently, but QoS isn't yet configurable. | Partial |
 | `CAL-005444` | Maybe | Buffer outgoing messages (if necessary). | N |
