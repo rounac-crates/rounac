@@ -298,6 +298,19 @@ impl AsbConnection {
 	}
 }
 
+/// Types that are capable of being used as a listener for [AsbReader].
+pub trait AsbListener<T>: Send + 'static {
+	/// This function is called anytime the associated reader receives a message.
+	fn on_msg(&mut self, msg: &T);
+}
+/// Convenience implementation for simple listeners.
+impl<T, F: Fn(&T) + Send + 'static> AsbListener<T> for F {
+	/// Simply calls this closure.
+	fn on_msg(&mut self, msg: &T) {
+		self(msg);
+	}
+}
+
 /// Provides messages received from the ASB through a polling interface.
 ///
 /// **IMPORTANT**: If the network type is "null" then every read will error.
@@ -312,7 +325,7 @@ pub struct AsbReader<T> {
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	callback_handle: Option<Arc<()>>,
 	/// All registered listeners keyed by a random number.
-	listeners: Arc<Mutex<Vec<(u32, Box<dyn Fn(&T) + Send>)>>>,
+	listeners: Arc<Mutex<Vec<(u32, Box<dyn AsbListener<T>>)>>>,
 }
 impl<T> AsbReader<T> {
 	fn callback_mode_error(&self) -> Result<(), CalError> {
@@ -370,7 +383,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 	/// Register a function to be called whenever a new message is received.
 	///
 	/// **IMPORTANT**: All listeners on this reader share a thread.
-	pub fn add_listener(&mut self, fun: impl Fn(&T) + Send + 'static) -> u32 {
+	pub fn add_listener(&mut self, fun: impl AsbListener<T>) -> u32 {
 		// Add function to listeners vec.
 		let id = rand::random();
 		{
@@ -398,8 +411,8 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 					// Otherwise try to receive a message and call the listeners.
 					match receiver.recv_timeout(Duration::from_millis(250)) {
 						Ok(msg) => {
-							for l in bg_listeners.lock().unwrap().iter() {
-								l.1(&msg);
+							for l in bg_listeners.lock().unwrap().iter_mut() {
+								l.1.on_msg(&msg);
 							}
 						}
 						Err(RecvTimeoutError::Disconnected) => break,
