@@ -12,7 +12,10 @@
 //! [services]
 //! # Optional default network for services.
 //! default_network = "rabbit"
+//! # Optional default wire format.
 //! default_wire_format = "xml"
+//! # Optional default QoS.
+//! default_qos = "blink_and_miss_it"
 //!
 //! # Configuration for "service1" service.
 //! [services.service1]
@@ -23,6 +26,19 @@
 //! network = "rabbitmq"
 //! # Optional if services.default_wire_format exists, otherwise required.
 //! wire_format = "xml"
+//! # Optional, overrides services.default_qos.
+//! qos = "blink_and_miss_it"
+//!
+//! # Optional topics sub-table.
+//! [services.service1.topics]
+//! # Key is the actual value used when creating a reader/writer.
+//! topic1 = {
+//!     # Optional field that specifies the topic to use on the underlying
+//!     # transport.
+//!     bus_topic = "real_topic1",
+//!     # Optional QoS, overrides services.*.qos and services.default_qos.
+//!     qos = "blink_and_miss_it",
+//! }
 //!
 //! # Configuration for "rabbitmq" network.
 //! [networks.rabbitmq]
@@ -45,9 +61,6 @@
 //! [networks.blackhole]
 //! kind = "null"
 //!
-//! ##
-//! ## WARNING: These settings are presently non-functional, but will be soon.
-//! ##
 //! [qos.blink_and_miss_it]
 //! # Optional buffer size. Defaults to 100.
 //! buffer = 1
@@ -75,7 +88,6 @@ use uuid::Uuid;
 pub struct AsbConfig {
 	pub(crate) system_uuid: Option<Uuid>,
 	pub(crate) services: ServicesConfig,
-	#[serde(default)]
 	pub(crate) networks: HashMap<String, NetworkConfig>,
 	#[serde(default)]
 	pub(crate) qos: HashMap<String, QosSettings>,
@@ -104,6 +116,9 @@ pub struct ServiceConfig {
 	pub(crate) service_uuid: Option<Uuid>,
 	pub(crate) network: Option<String>,
 	pub(crate) wire_format: Option<WireFormat>,
+	pub(crate) qos: Option<String>,
+	#[serde(default)]
+	pub(crate) topics: HashMap<String, TopicConfig>,
 }
 
 /// Configuration of a single network.
@@ -142,6 +157,13 @@ impl FromStr for WireFormat {
 			_ => Err("unrecognized wire format"),
 		}
 	}
+}
+
+/// Topic-specific settings.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct TopicConfig {
+	pub(crate) bus_topic: Option<String>,
+	pub(crate) qos: Option<String>,
 }
 
 /// Quality-of-Service settings for the CAL.
@@ -272,6 +294,8 @@ mod test {
 		service_uuid = "00000000-0000-4000-8000-0123456789AB"
 		network = "null"
 		wire_format = "xml"
+
+		[networks]
 		"#;
 
 		let mut services = HashMap::new();
@@ -281,6 +305,8 @@ mod test {
 				service_uuid: Some(uuid::uuid!("00000000-0000-4000-8000-0123456789AB")),
 				network: Some("null".to_string()),
 				wire_format: Some(WireFormat::Xml),
+				qos: None,
+				topics: HashMap::new(),
 			},
 		);
 		let expected = AsbConfig {

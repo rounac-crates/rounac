@@ -212,6 +212,8 @@ mod test {
 				service_uuid: None,
 				network: Some("null".to_string()),
 				wire_format: Some(WireFormat::Xml),
+				qos: None,
+				topics: Default::default(),
 			},
 		);
 
