@@ -121,7 +121,7 @@ impl Asb {
 	}
 
 	/// Register a function to be called whenever the status of this ASB changes.
-	pub fn add_status_listener(&self, fun: impl AsbStatusListener + 'static) -> u32 {
+	fn add_status_listener(&self, fun: impl AsbStatusListener + 'static) -> u32 {
 		// Add function to listeners vec.
 		let mut listeners = self.status_listeners.write().unwrap();
 		let id = rand::random();
@@ -137,7 +137,7 @@ impl Asb {
 	}
 
 	/// Remove the listener identified with `id`, returning `true` if it exists.
-	pub fn remove_status_listener(&self, id: u32) -> bool {
+	fn remove_status_listener(&self, id: u32) -> bool {
 		let mut listeners = self.status_listeners.write().unwrap();
 		if let Some(idx) = listeners.iter().position(|f| f.0 == id) {
 			// Swap remove since order is not important.
