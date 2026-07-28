@@ -22,15 +22,33 @@ impl<T: Fn(AsbConnStatus) + Send + Sync + 'static> AsbStatusListener for T {
 }
 
 /// Possible states of the ASB.
+///
+/// The descriptions for each are taken from the OMS CAL specification
+/// verbatim, with slight modifications for this implementation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AsbConnStatus {
+	/// **THIS IS NEVER USED FOR ROUNAC**. [Asb::new] will not return if
+	/// initialization is still occuring.
 	// This should always be 0 so default [Asb] has a sensible value.
 	// Should never be used since [Asb::new] won't return if not fully
 	// initialized.
 	Initializing = 0,
+	/// CAL is functioning normally, where all functions can be used. All QoS
+	/// settings, as applicable, are being met. Read and write methods will behave
+	/// as normal.
 	Normal,
+	/// CAL is not functioning normally, where functions can be used but there may
+	/// be limitations. Not all QoS settings are being satisfied. The CAL can send
+	/// and receive but QoS settings are not being satisfied. Read and write
+	/// methods will behave as normal.
 	Degraded,
+	/// CAL is unusable but may return to an operational state in the future. CAL
+	/// is unable to send or receive messages and is attempting to recover. Read
+	/// and write methods will return [CalError].
 	Inoperable,
+	/// CAL is unusable and return to an operational state is not possible.
+	/// Identical to Inoperable state but recovery is not possible. Read and write
+	/// methods will return [CalError].
 	Failed,
 }
 impl TryFrom<usize> for AsbConnStatus {
