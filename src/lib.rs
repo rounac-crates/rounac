@@ -99,7 +99,8 @@ impl Asb {
 			service_name: service_name.to_owned(),
 			system_uuid,
 			service_uuid,
-			status: AtomicUsize::default(),
+			// For now, status always normal since connection errors if something fails.
+			status: AtomicUsize::new(AsbConnStatus::Normal as usize),
 			status_listeners: RwLock::new(Vec::new()),
 			connection,
 		})
