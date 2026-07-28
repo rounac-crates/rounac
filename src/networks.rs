@@ -390,19 +390,19 @@ impl AsbConnection {
 /// Types that are capable of being used as a listener for [AsbReader].
 pub trait AsbListener<T>: Send + 'static {
 	/// This function is called anytime the associated reader receives a message.
-	fn on_msg(&self, msg: &T);
+	fn on_msg(&self, msg: Arc<T>);
 }
 /// Convenience implementation for simple listeners.
-impl<T, F: Fn(&T) + Send + 'static> AsbListener<T> for F {
+impl<T, F: Fn(Arc<T>) + Send + 'static> AsbListener<T> for F {
 	/// Simply calls this closure.
-	fn on_msg(&self, msg: &T) {
+	fn on_msg(&self, msg: Arc<T>) {
 		self(msg);
 	}
 }
 /// Convenience implementation for shared listeners.
 impl<M, T: AsbListener<M> + Sync> AsbListener<M> for Arc<T> {
 	/// Simply calls the function defined on the inner type `T`.
-	fn on_msg(&self, msg: &M) {
+	fn on_msg(&self, msg: Arc<M>) {
 		self.deref().on_msg(msg);
 	}
 }
@@ -612,7 +612,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 							Ok((t, msg)) => {
 								if t.elapsed() <= expiration {
 									for l in bg_listeners.lock().unwrap().iter_mut() {
-										l.1.on_msg(&msg);
+										l.1.on_msg(msg.clone());
 									}
 								}
 							}
@@ -633,7 +633,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 						match receiver.recv_timeout(RECV_TMOUT) {
 							Ok((_, msg)) => {
 								for l in bg_listeners.lock().unwrap().iter() {
-									l.1.on_msg(&msg);
+									l.1.on_msg(msg.clone());
 								}
 							}
 							// If disconnected break loop.

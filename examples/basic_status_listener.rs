@@ -5,7 +5,7 @@
 
 use rounac::Asb;
 use rounac_uci::v2_5::elements::ServiceStatus;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 // Simple configuration that will utilize the `amqp` network type.
 const CONFIG: &str = r#"
@@ -41,7 +41,7 @@ fn main() {
 	let schema_ver = rounac_uci::v2_5::SCHEMA_VERSION;
 
 	// Prepare listener
-	let l_id = reader.add_listener(move |msg: &ServiceStatus| {
+	let l_id = reader.add_listener(move |msg: Arc<ServiceStatus>| {
 		println!("Received status from {}!", msg.message_data.service_id.uuid);
 
 		// Check schema version in header just to do something.
