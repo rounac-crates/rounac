@@ -283,7 +283,6 @@ impl AsbConnection {
 						.finish();
 
 					// If an exchange is specified, bind queue to it.
-					// TODO: Is QoS expiration, set `x-message-ttl` to millis
 					if let Some(ref ex) = asb.exchange {
 						let args = QueueBindArguments::new(&res.0, &ex, topic_name);
 						asb.chan.queue_bind(args).await?;
