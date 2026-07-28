@@ -15,7 +15,7 @@ This is a basic example of subscribing to a topic, taken directly from the
 full configuration reference, see the config module documentation.
 
 ```rust
-use rounac::{Asb, QosSettings, Topic};
+use rounac::Asb;
 use rounac_uci::v2_5::elements::ServiceStatus;
 use std::time::{Duration, Instant};
 
@@ -37,8 +37,7 @@ fn main() {
     // Load the configuration and create the ASB + reader.
     let config = CONFIG.parse().unwrap();
     let asb = Asb::new("basic_status_subscribe", config).unwrap();
-    let topic = Topic::<ServiceStatus>::new("status", QosSettings::default()).unwrap();
-    let reader = asb.new_reader(&topic).unwrap();
+    let reader = asb.new_reader::<ServiceStatus>("status").unwrap();
 
     // Loop and send a few status messages.
     let listen_time = Duration::from_secs(10);
