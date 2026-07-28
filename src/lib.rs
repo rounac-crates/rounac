@@ -12,47 +12,15 @@ mod networks;
 
 pub use crate::error::{CalError, CalErrorKind};
 use crate::networks::AsbConnection;
-pub use crate::networks::{AsbListener, AsbReader, AsbWriter};
+pub use crate::networks::{
+	AsbListener, AsbReader, AsbWriter,
+	utils::{AsbConnStatus, AsbStatusListener},
+};
 
 use config::AsbConfig;
 use serde::{Deserialize, Serialize};
-use std::{
-	default::Default,
-	sync::{
-		Arc, RwLock,
-		atomic::{AtomicUsize, Ordering},
-	},
-	thread,
-};
+use std::{sync::Arc, thread};
 use uuid::Uuid;
-
-/// Possible states of the ASB.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AsbConnStatus {
-	// This should always be 0 so default [Asb] has a sensible value.
-	Initializing = 0,
-	Normal,
-	Degraded,
-	Inoperable,
-	Failed,
-}
-impl TryFrom<usize> for AsbConnStatus {
-	type Error = ();
-	fn try_from(v: usize) -> Result<Self, Self::Error> {
-		match v {
-			x if x == AsbConnStatus::Initializing as usize => Ok(AsbConnStatus::Initializing),
-			x if x == AsbConnStatus::Normal as usize => Ok(AsbConnStatus::Normal),
-			x if x == AsbConnStatus::Degraded as usize => Ok(AsbConnStatus::Degraded),
-			x if x == AsbConnStatus::Inoperable as usize => Ok(AsbConnStatus::Inoperable),
-			x if x == AsbConnStatus::Failed as usize => Ok(AsbConnStatus::Failed),
-			_ => Err(()),
-		}
-	}
-}
-
-/// Empty trait that simply groups the desired closure with [Send] and [Sync].
-pub trait AsbStatusListener: Fn(AsbConnStatus) + Send + Sync {}
-impl<T: Fn(AsbConnStatus) + Send + Sync> AsbStatusListener for T {}
 
 /// Abstract Service Bus.
 pub struct Asb {
@@ -60,10 +28,6 @@ pub struct Asb {
 	service_name: String,
 	system_uuid: Uuid,
 	service_uuid: Uuid,
-	/// The current status as an integer representing a variant of [AsbConnStatus].
-	status: AtomicUsize,
-	/// Vector of `(id, fn)` where `id` is a random number to remove `fn` later.
-	status_listeners: RwLock<Vec<(u32, Arc<dyn AsbStatusListener>)>>,
 	//runtime: tokio::runtime::Runtime, // Maybe only use if async asb.
 	/// Data specific to this ASB's network connection.
 	connection: AsbConnection,
@@ -99,63 +63,23 @@ impl Asb {
 			service_name: service_name.to_owned(),
 			system_uuid,
 			service_uuid,
-			// For now, status always normal since connection errors if something fails.
-			status: AtomicUsize::new(AsbConnStatus::Normal as usize),
-			status_listeners: RwLock::new(Vec::new()),
 			connection,
 		})
 	}
 
 	/// Get the current status of this ASB.
 	pub fn get_connection_status(&self) -> AsbConnStatus {
-		// Safety: Connection status will only ever be set through `set_connection_status()` which guarantees a valid value.
-		self.status.load(Ordering::Relaxed).try_into().unwrap()
-	}
-
-	/// If `new_status` differs from current status, update status and notify listeners. Else ignore.
-	fn set_connection_status(&self, new_status: AsbConnStatus) {
-		if self.get_connection_status() != new_status {
-			self.status.store(new_status as usize, Ordering::Relaxed);
-			self.call_status_listeners(new_status);
-		}
+		self.connection.get_status()
 	}
 
 	/// Register a function to be called whenever the status of this ASB changes.
-	fn add_status_listener(&self, fun: impl AsbStatusListener + 'static) -> u32 {
-		// Add function to listeners vec.
-		let mut listeners = self.status_listeners.write().unwrap();
-		let id = rand::random();
-		let f = Arc::new(fun);
-		listeners.push((id, f.clone()));
-
-		// Call the function immediately with current status.
-		let status = self.get_connection_status();
-		thread::spawn(move || f(status));
-
-		// Return ID to user so they can remove listener later
-		id
+	pub fn add_status_listener(&self, fun: impl AsbStatusListener) -> u32 {
+		self.connection.add_status_listener(fun)
 	}
 
 	/// Remove the listener identified with `id`, returning `true` if it exists.
-	fn remove_status_listener(&self, id: u32) -> bool {
-		let mut listeners = self.status_listeners.write().unwrap();
-		if let Some(idx) = listeners.iter().position(|f| f.0 == id) {
-			// Swap remove since order is not important.
-			listeners.swap_remove(idx);
-
-			true
-		} else {
-			false
-		}
-	}
-
-	/// Create a new thread for each status listener and call them with `status`.
-	fn call_status_listeners(&self, status: AsbConnStatus) {
-		let listeners = self.status_listeners.read().unwrap();
-		for listener in listeners.iter() {
-			let f = listener.1.clone();
-			thread::spawn(move || f(status));
-		}
+	pub fn remove_status_listener(&self, id: u32) -> bool {
+		self.connection.remove_status_listener(id)
 	}
 
 	/// Return the [Uuid] of the system this ASB resides on.
@@ -233,60 +157,5 @@ mod test {
 		};
 
 		Asb::new("my_service", config).unwrap()
-	}
-
-	/// Test that a status listener is correctly called for each status.
-	#[test]
-	fn status_listener() {
-		use std::sync::atomic::{AtomicBool, AtomicUsize};
-
-		// Create ASB and manually set the status to ensure consistency.
-		let asb = new_asb();
-		asb.status
-			.store(AsbConnStatus::Initializing as usize, Ordering::Relaxed);
-
-		// Variables for this thread
-		let call_count = Arc::new(AtomicUsize::default());
-		let init_hit = Arc::new(AtomicBool::default());
-		let norm_hit = Arc::new(AtomicBool::default());
-		let degr_hit = Arc::new(AtomicBool::default());
-		let inop_hit = Arc::new(AtomicBool::default());
-		let fail_hit = Arc::new(AtomicBool::default());
-
-		// Variables for listener thread
-		let count = call_count.clone();
-		let init = init_hit.clone();
-		let norm = norm_hit.clone();
-		let degr = degr_hit.clone();
-		let inop = inop_hit.clone();
-		let fail = fail_hit.clone();
-
-		// Add the listener.
-		asb.add_status_listener(move |status| {
-			match status {
-				AsbConnStatus::Initializing => init.store(true, Ordering::Relaxed),
-				AsbConnStatus::Normal => norm.store(true, Ordering::Relaxed),
-				AsbConnStatus::Degraded => degr.store(true, Ordering::Relaxed),
-				AsbConnStatus::Inoperable => inop.store(true, Ordering::Relaxed),
-				AsbConnStatus::Failed => fail.store(true, Ordering::Relaxed),
-			};
-			count.fetch_add(1, Ordering::Relaxed);
-		});
-		asb.set_connection_status(AsbConnStatus::Normal);
-		asb.set_connection_status(AsbConnStatus::Degraded);
-		asb.set_connection_status(AsbConnStatus::Inoperable);
-		asb.set_connection_status(AsbConnStatus::Failed);
-
-		// Ensure listener was called the correct number of times.
-		while call_count.load(Ordering::Acquire) != 5 {
-			std::hint::spin_loop();
-		}
-
-		// Check that every state was reached
-		assert!(init_hit.load(Ordering::Acquire));
-		assert!(norm_hit.load(Ordering::Acquire));
-		assert!(degr_hit.load(Ordering::Acquire));
-		assert!(inop_hit.load(Ordering::Acquire));
-		assert!(fail_hit.load(Ordering::Acquire));
 	}
 }

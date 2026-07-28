@@ -1,13 +1,15 @@
 //! Module for the network related types.
 
-pub mod amqp;
-mod utils;
+pub(crate) mod amqp;
+pub(crate) mod utils;
 
 use crate::{
 	config::{AsbConfig, NetworkKind, ReliabilityQos, WireFormat},
 	error::CalError,
-	networks::amqp::{ChanCb, ConnCb},
-	networks::utils::PossessCtr,
+	networks::{
+		amqp::{ChanCb, ConnCb},
+		utils::{AsbConnStatus, AsbStatusListener, PossessCtr, StatusCallbackManager},
+	},
 };
 use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
@@ -61,6 +63,7 @@ pub struct AsbConnection {
 	net: AsbNetMode,
 	/// Map of topic name to (count, topic_type). Mutex for flexibility.
 	topics: Mutex<HashMap<String, (PossessCtr, any::TypeId)>>,
+	status_manager: Arc<StatusCallbackManager>,
 }
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
@@ -139,14 +142,18 @@ impl AsbConnection {
 						notifier,
 					),
 					topics: Default::default(),
+					status_manager: Arc::new(StatusCallbackManager::new()),
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
 				topics: Default::default(),
+				status_manager: Arc::new(StatusCallbackManager::new()),
 			}),
 		}
 	}
+
+	/* Reader/Writer */
 
 	fn get_topic_ctr<T: 'static>(&self, topic: &str) -> Result<PossessCtr, CalError> {
 		// Lock the map first
@@ -384,6 +391,19 @@ impl AsbConnection {
 				_asb: PhantomData,
 			}),
 		}
+	}
+
+	/* Status functions */
+	pub fn get_status(&self) -> AsbConnStatus {
+		self.status_manager.get_status()
+	}
+
+	pub fn add_status_listener(&self, fun: impl AsbStatusListener) -> u32 {
+		self.status_manager.add_listener(fun)
+	}
+
+	pub fn remove_status_listener(&self, id: u32) -> bool {
+		self.status_manager.remove_listener(id)
 	}
 }
 
