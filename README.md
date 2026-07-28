@@ -1,9 +1,18 @@
 # Rounac
-The Rust [OMS][1] [UCI][2] Not-A-CAL; pronounced "Runic".
+The Rust [OMS][1] [UCI][2] Not-A-[CAL][3]; pronounced "Runic".
+
+If you've seen the first requirements of a [Common Abstraction Layer (CAL)][3]
+then you might already guess why this is "Not-A-CAL": It's written in Rust!
+Since these are hard requirements, the best I can do is hit as many of the
+remaining requirements as possible (see [spec table](#cal-spec-certs)). On the
+other hand, because this specification comes with a defined API for the
+required languages (and they are VERY Java-like), I have latitude to make an
+API/library that is much more idiomatic than it might otherwise be.
 
 # Example
 This is a basic example of subscribing to a topic, taken directly from the
-`basic_status_subscribe` example in the repo but shortened slightly.
+`basic_status_subscribe` example in the repo but shortened slightly. For the
+full configuration reference, see the config module documentation.
 
 ```rust
 use rounac::{Asb, QosSettings, Topic};
@@ -50,8 +59,19 @@ fn main() {
 ```
 
 # Supported transports
-## AMQP (in progress)
-`amqprs`
+## AMQP 0-9-1
+Utilizes [amqprs](https://crates.io/crates/amqprs).
+
+### Performance
+Utilizing the benchmarking examples (with slight additions) on an AMD 9700X
+with a local RabbitMQ 4 broker in podman (host network mode):
+
+| Metric | Value |
+|---|---|
+| Send throughput | ~62k messages / sec (broker bottleneck) |
+| Receive throughput | ~62k messages / sec (broker bottleneck) |
+| Max receive delay | 891ms |
+
 ## ZeroMQ (desired)
 `zeromq` (Rust native) or `zmq` (libzmq wrapper).
 ## MQTT (desired)
@@ -121,3 +141,4 @@ fn main() {
 
 [1]: https://gitlab.com/open-arsenal/oms/standard
 [2]: https://gitlab.com/open-arsenal/uci/standard
+[3]: https://gitlab.com/open-arsenal/oms/standard/-/blob/main/docs_official/04_OMSC-SPC-001_RevL_CAL_Specification_DandD_v2_5.docx?ref_type=heads
