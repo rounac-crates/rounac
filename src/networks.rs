@@ -73,6 +73,12 @@ impl AsbConnection {
 			)));
 		};
 
+		// Create status manager so networks can clone as needed.
+		let status_manager = Arc::new(StatusCallbackManager::new());
+		// Always starts as Normal since this function will return an error if it
+		// would be in any other state upon completion.
+		status_manager.set_status(AsbConnStatus::Normal);
+
 		match network.kind {
 			NetworkKind::Amqp => {
 				// Create current thread flavor runtime for now.
@@ -102,13 +108,21 @@ impl AsbConnection {
 					None => true,
 				};
 
+				// Prepare callbacks
+				let conn_cb = ConnCb {
+					status_manager: status_manager.clone(),
+				};
+				let chan_cb = ChanCb {
+					status_manager: status_manager.clone(),
+				};
+
 				// Open the connection and create a single channel for everything.
 				let open_args = open_args_for_net(&network)?;
 				let (conn, chan) = rt.block_on(async {
 					let conn = Connection::open(&open_args).await?;
-					conn.register_callback(ConnCb).await?;
+					conn.register_callback(conn_cb).await?;
 					let chan = conn.open_channel(None).await?;
-					chan.register_callback(ChanCb).await?;
+					chan.register_callback(chan_cb).await?;
 					chan.flow(true).await?; // Kickstart traffic flowing
 
 					// If config has exchange name, create direct exchange.
@@ -142,13 +156,13 @@ impl AsbConnection {
 						notifier,
 					),
 					topics: Default::default(),
-					status_manager: Arc::new(StatusCallbackManager::new()),
+					status_manager,
 				})
 			}
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
 				topics: Default::default(),
-				status_manager: Arc::new(StatusCallbackManager::new()),
+				status_manager,
 			}),
 		}
 	}

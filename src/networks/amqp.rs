@@ -3,6 +3,7 @@
 use crate::{
 	config::{NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
+	networks::utils::{AsbConnStatus, StatusCallbackManager},
 };
 use amqprs::{
 	Ack, BasicProperties, Cancel, Close, CloseChannel, Deliver, Nack, Return,
@@ -122,7 +123,11 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 	}
 }
 
-pub(crate) struct ConnCb;
+// TODO: If reconnection desired, `AmqpAsb` needs to be [RwLock]'d and [Arc]'d
+//       plus track consumers (would require `dyn` over [AmqpConsumer]).
+pub(crate) struct ConnCb {
+	pub(crate) status_manager: Arc<StatusCallbackManager>,
+}
 #[async_trait]
 impl ConnectionCallback for ConnCb {
 	async fn close(&mut self, connection: &Connection, close: Close) -> Result<(), Error> {
@@ -131,6 +136,12 @@ impl ConnectionCallback for ConnCb {
 			"ERROR: Connection({}) closed by server: {close}",
 			connection.connection_name()
 		);
+
+		// If connection is closed, then ASB connection is in a failure state.
+		// TODO: If reconnect logic is ever added for AMQP, change this to
+		// `AsbConnStatus::Inoperable`.
+		self.status_manager.set_status(AsbConnStatus::Failed);
+
 		Ok(())
 	}
 
@@ -141,7 +152,11 @@ impl ConnectionCallback for ConnCb {
 	async fn secret_updated(&mut self, _: &Connection) {}
 }
 
-pub(crate) struct ChanCb;
+// If desired to re-opening channels, see TODO on [ConnCb] for general
+// refactors required.
+pub(crate) struct ChanCb {
+	pub(crate) status_manager: Arc<StatusCallbackManager>,
+}
 #[async_trait]
 impl ChannelCallback for ChanCb {
 	async fn close(&mut self, chan: &Channel, close_channel: CloseChannel) -> Result<(), Error> {
@@ -150,6 +165,11 @@ impl ChannelCallback for ChanCb {
 			"ERROR: Channel({}) closed by server: {close_channel}",
 			chan.channel_id()
 		);
+
+		// If channel is closed, then ASB connection is active but reads/writes will
+		// not work.
+		self.status_manager.set_status(AsbConnStatus::Inoperable);
+
 		Ok(())
 	}
 
