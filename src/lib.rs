@@ -19,7 +19,6 @@ pub use crate::networks::{
 
 use config::AsbConfig;
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, thread};
 use uuid::Uuid;
 
 /// Abstract Service Bus.
@@ -93,8 +92,8 @@ impl Asb {
 	}
 
 	/// Create a new [AsbReader] for the given [Topic].
-	pub fn new_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
-		&'a self,
+	pub fn new_reader<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		&self,
 		topic: &str,
 	) -> Result<AsbReader<T>, CalError> {
 		Ok(self
@@ -103,8 +102,8 @@ impl Asb {
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
-	pub fn new_writer<'a, T: Serialize + 'static>(
-		&'a self,
+	pub fn new_writer<T: Serialize + 'static>(
+		&self,
 		topic: &str,
 	) -> Result<AsbWriter<T>, CalError> {
 		Ok(self
