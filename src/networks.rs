@@ -251,7 +251,7 @@ impl AsbConnection {
 				// Try to get the bus topic
 				cfg.topics
 					.get(topic)
-					.and_then(|tcfg| tcfg.qos.as_ref())
+					.and_then(|tcfg| tcfg.bus_topic.as_ref())
 					.map(|s| s.as_str())
 			})
 			.unwrap_or(topic);
@@ -373,7 +373,7 @@ impl AsbConnection {
 				// Try to get the bus topic
 				cfg.topics
 					.get(topic)
-					.and_then(|tcfg| tcfg.qos.as_ref())
+					.and_then(|tcfg| tcfg.bus_topic.as_ref())
 					.map(|s| s.as_str())
 			})
 			.unwrap_or(topic);
