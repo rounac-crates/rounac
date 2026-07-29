@@ -96,9 +96,8 @@ impl Asb {
 		&self,
 		topic: &str,
 	) -> Result<AsbReader<T>, CalError> {
-		Ok(self
-			.connection
-			.create_reader(topic, &self.config, &self.service_name)?)
+		self.connection
+			.create_reader(topic, &self.config, &self.service_name)
 	}
 
 	/// Create a new [AsbWriter] for the given [Topic].
@@ -106,8 +105,7 @@ impl Asb {
 		&self,
 		topic: &str,
 	) -> Result<AsbWriter<T>, CalError> {
-		Ok(self
-			.connection
-			.create_writer(topic, &self.config, &self.service_name)?)
+		self.connection
+			.create_writer(topic, &self.config, &self.service_name)
 	}
 }
