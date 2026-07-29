@@ -659,7 +659,6 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 					loop {
 						// When reader drops its counter, this will trigger to stop the loop.
 						if handle.is_unique() {
-							println!("Background thread stopping!");
 							break;
 						}
 
