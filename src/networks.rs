@@ -117,7 +117,7 @@ impl AsbConnection {
 				};
 
 				// Open the connection and create a single channel for everything.
-				let open_args = open_args_for_net(&network)?;
+				let open_args = open_args_for_net(network)?;
 				let (conn, chan) = rt.block_on(async {
 					let conn = Connection::open(&open_args).await?;
 					conn.register_callback(conn_cb).await?;
@@ -237,7 +237,7 @@ impl AsbConnection {
 				config
 					.qos
 					.get(name)
-					.map(|q| *q)
+					.copied()
 					.ok_or(CalError::config_err(format_args!(
 						"Could not find QoS settings for {name}"
 					)))
@@ -303,7 +303,7 @@ impl AsbConnection {
 
 					// If an exchange is specified, bind queue to it.
 					if let Some(ref ex) = asb.exchange {
-						let args = QueueBindArguments::new(&res.0, &ex, topic_name);
+						let args = QueueBindArguments::new(&res.0, ex, topic_name);
 						asb.chan.queue_bind(args).await?;
 					}
 
@@ -391,7 +391,7 @@ impl AsbConnection {
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),
 					format: *wire_format,
-					counter,
+					_counter: counter,
 					_asb: PhantomData,
 				})
 			}
@@ -399,7 +399,7 @@ impl AsbConnection {
 				net: AsbWriterNet::Null,
 				// No default for [WireFormat] so just picking Xml since it's the first.
 				format: WireFormat::Xml,
-				counter,
+				_counter: counter,
 				_asb: PhantomData,
 			}),
 		}
@@ -439,6 +439,11 @@ impl<M, T: AsbListener<M> + Sync> AsbListener<M> for Arc<T> {
 	}
 }
 
+/// Listener id with callback type.
+type Listener<T> = (u32, Box<dyn AsbListener<T>>);
+/// Reader id with send portion of ring buffer.
+type ReaderSender<T> = (u32, RingSender<(Instant, Arc<T>)>);
+
 /// Provides messages received from the ASB through a polling interface.
 ///
 /// **IMPORTANT**: If the network type is "null" then every read will error.
@@ -449,14 +454,14 @@ pub struct AsbReader<T> {
 	expiration: Option<Duration>,
 	/// Shared with consumer for this topic. `u32` is random to identify sender
 	/// for this [AsbReader].
-	all_senders: Arc<Mutex<Vec<(u32, RingSender<(Instant, Arc<T>)>)>>>,
+	all_senders: Arc<Mutex<Vec<ReaderSender<T>>>>,
 	my_sender_id: u32,
 	/// Arc so that any unsubscribes happen only after last reader drops.
 	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	callback_handle: Option<PossessCtr>,
 	/// All registered listeners keyed by a random number.
-	listeners: Arc<Mutex<Vec<(u32, Box<dyn AsbListener<T>>)>>>,
+	listeners: Arc<Mutex<Vec<Listener<T>>>>,
 	/// Not used, simply holds so [AsbConnection] can track topic usage.
 	counter: PossessCtr,
 }
@@ -756,7 +761,8 @@ impl Drop for AsbReaderNet {
 pub struct AsbWriter<T> {
 	net: AsbWriterNet,
 	format: WireFormat,
-	counter: PossessCtr,
+	/// Intentionally unused, this existing is what matters.
+	_counter: PossessCtr,
 	_asb: PhantomData<T>,
 }
 #[derive(Clone)]

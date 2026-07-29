@@ -209,7 +209,7 @@ mod opt_duration_serde {
 				_ => None,
 			}
 		} else {
-			Some(Duration::from_secs(v as u64))
+			Some(Duration::from_secs(v))
 		}
 	}
 
@@ -267,17 +267,13 @@ mod opt_duration_serde {
 }
 
 /// Reliability types for a CAL.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ReliabilityQos {
 	#[serde(rename = "reliable")]
+	#[default]
 	Reliable,
 	#[serde(rename = "best_effort")]
 	BestEffort,
-}
-impl Default for ReliabilityQos {
-	fn default() -> Self {
-		ReliabilityQos::Reliable
-	}
 }
 
 #[cfg(test)]

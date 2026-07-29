@@ -1,5 +1,6 @@
 //! AMQPRS related utilities
 
+use super::ReaderSender;
 use crate::{
 	config::{NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
@@ -14,7 +15,6 @@ use amqprs::{
 	error::Error,
 };
 use async_trait::async_trait;
-use crossbeam_ring_channel::RingSender;
 use serde::Deserialize;
 use std::{
 	sync::{Arc, Mutex},
@@ -65,7 +65,7 @@ pub(crate) struct AmqpAsb {
 pub struct AmqpConsumer<T> {
 	pub format: WireFormat,
 	/// Shared with each reader, but readers only modify during clone and drop.
-	pub buffers: Arc<Mutex<Vec<(u32, RingSender<(Instant, Arc<T>)>)>>>,
+	pub buffers: Arc<Mutex<Vec<ReaderSender<T>>>>,
 	pub qos: QosSettings,
 	pub last_received: Option<Instant>,
 }
@@ -96,10 +96,10 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 		// deserializing if we aren't due for another message.
 		if let Some(dur) = self.qos.time_based_filter {
 			// Checking time since last receive else setting last receive to now.
-			if let Some(last) = self.last_received {
-				if last.elapsed() < dur {
-					return;
-				}
+			if let Some(last) = self.last_received
+				&& last.elapsed() < dur
+			{
+				return;
 			}
 
 			self.last_received = Some(Instant::now());
