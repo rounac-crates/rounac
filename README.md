@@ -131,11 +131,11 @@ with a local RabbitMQ 4 broker in podman (host network mode):
 | `CAL-005434` | Y* | Broker/protocol specific, possibly configuration-dependent too. | Y* |
 | `CAL-016076` | Y* | Broker/protocol specific, but messages are sent/received in the order given. | Y* |
 | `CAL-005437` | Y | `AsbReader` will ignore and discard any messages past expiration. | Y |
-| `CAL-015746` | Y | Reader/Writer use topic QoS currently, but QoS isn't yet configurable. | Partial |
+| `CAL-015746` | Y | See `config` module documentation for QoS settings. | Y |
 | `CAL-005444` | Maybe | Buffer outgoing messages (if necessary). | N |
 | `CAL-005445` | Y | Overwriting ring buffers are used, but only reader uses currently. | Partial |
 | `CAL-016079` | Y | An overwriting ring buffer is used. | Y |
-| `CAL-016366` | Y | All logic to call listeners on change exists, but nothing changes status. | Partial |
+| `CAL-016366` | Y | Listeners will be called upon registering and on status changes. | Y |
 
 
 [1]: https://gitlab.com/open-arsenal/oms/standard
