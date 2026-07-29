@@ -32,7 +32,7 @@ pub fn deserialize_msg<'de, T: Deserialize<'de>>(
 			// First convert data to a [str].
 			let Ok(data_str) = str::from_utf8(data) else {
 				return Err(CalError::serde_err(
-					"XML deserialization requires UTF-8 data".to_string(),
+					"XML deserialization requires UTF-8 data",
 				));
 			};
 

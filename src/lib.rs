@@ -35,7 +35,7 @@ impl Asb {
 	/// Get an initialized ASB for the client with the name `service_name`.
 	pub fn new(service_name: &str, config: AsbConfig) -> Result<Self, CalError> {
 		let Some(service_config) = config.services.service.get(service_name) else {
-			return Err(CalError::config_err(format!(
+			return Err(CalError::config_err(format_args!(
 				"Missing service config for {service_name}"
 			)));
 		};
@@ -50,7 +50,7 @@ impl Asb {
 		// Get network from service config or the default
 		let default_network = config.services.default_network.as_ref();
 		let Some(network) = service_config.network.as_ref().or(default_network) else {
-			return Err(CalError::config_err(format!(
+			return Err(CalError::config_err(format_args!(
 				"Missing network config for service {service_name}"
 			)));
 		};

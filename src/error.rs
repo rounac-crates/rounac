@@ -22,6 +22,25 @@ pub enum CalErrorKind {
 	/// An error not covered by another category.
 	Other,
 }
+
+macro_rules! kind_helpers {
+	{
+		$($fn_name:ident -> $kind:expr)*
+	} => {
+		$(
+		#[doc = concat!("Return a [CalError] with kind `", stringify!($kind), "`.")]
+		pub(crate) fn $fn_name<D: Display>(msg: D) -> Self {
+			use CalErrorKind::*;
+
+			CalError {
+				kind: $kind,
+				data: Arc::from(Box::<dyn Error>::from(msg.to_string())),
+			}
+		}
+		)*
+	};
+}
+
 #[derive(Clone)]
 pub struct CalError {
 	kind: CalErrorKind,
@@ -32,44 +51,19 @@ impl CalError {
 		self.kind
 	}
 
-	/// Return a [CalError] with kind `Config`.
-	pub fn config_err(msg: String) -> Self {
+	pub(crate) fn new(kind: CalErrorKind, err: impl Error + 'static) -> Self {
 		CalError {
-			kind: CalErrorKind::Config,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
+			kind,
+			data: Arc::from(err),
 		}
 	}
 
-	/// Return a [CalError] with kind `Illegal`.
-	pub fn ill_err(msg: String) -> Self {
-		CalError {
-			kind: CalErrorKind::Illegal,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
-		}
-	}
-
-	/// Return a [CalError] with kind `Network`.
-	pub fn net_err(msg: String) -> Self {
-		CalError {
-			kind: CalErrorKind::Network,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
-		}
-	}
-
-	/// Return a [CalError] with kind `Other`.
-	pub fn other_err(msg: String) -> Self {
-		CalError {
-			kind: CalErrorKind::Other,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
-		}
-	}
-
-	/// Return a [CalError] with kind `Other`.
-	pub fn serde_err(msg: String) -> Self {
-		CalError {
-			kind: CalErrorKind::Serde,
-			data: Arc::from(Box::<dyn Error>::from(msg)),
-		}
+	kind_helpers! {
+		config_err -> Config
+		ill_err -> Illegal
+		net_err -> Network
+		other_err -> Other
+		serde_err -> Serde
 	}
 }
 impl Error for CalError {}

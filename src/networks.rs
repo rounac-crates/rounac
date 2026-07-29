@@ -68,7 +68,7 @@ pub struct AsbConnection {
 impl AsbConnection {
 	pub fn connect(net_name: &str, config: &AsbConfig) -> Result<Self, CalError> {
 		let Some(network) = config.networks.get(net_name) else {
-			return Err(CalError::config_err(format!(
+			return Err(CalError::config_err(format_args!(
 				"Missing network config for {net_name}"
 			)));
 		};
@@ -92,7 +92,7 @@ impl AsbConnection {
 				let exchange = match network.params.get("exchange") {
 					Some(toml::Value::String(ex)) if !ex.is_empty() => Some(ex.to_owned()),
 					Some(_) => {
-						return Err(CalError::config_err(format!(
+						return Err(CalError::config_err(format_args!(
 							"AMQP parameter \"exchange\" must be a non-empty string."
 						)));
 					}
@@ -101,7 +101,7 @@ impl AsbConnection {
 				let durable = match network.params.get("durable_exchange") {
 					Some(toml::Value::Boolean(ex)) => *ex,
 					Some(_) => {
-						return Err(CalError::config_err(format!(
+						return Err(CalError::config_err(format_args!(
 							"AMQP parameter \"durable_exchange\" must be a boolean."
 						)));
 					}
@@ -182,9 +182,7 @@ impl AsbConnection {
 				// If the type does not match, then it will only be allowed if counter is
 				// unique.
 				if any::TypeId::of::<T>() != *ty && !count.is_unique() {
-					return Err(CalError::ill_err(
-						"Type mismatch with existing readers".to_owned(),
-					));
+					return Err(CalError::ill_err("Type mismatch with existing readers"));
 				}
 
 				// Valid reader, so clone the counter for the reader.
@@ -217,7 +215,7 @@ impl AsbConnection {
 					.as_ref()
 					.or(config.services.default_wire_format.as_ref())
 			})
-			.ok_or(CalError::config_err(format!(
+			.ok_or(CalError::config_err(format_args!(
 				"No wire format specified for topic {topic} under service {svc_name}."
 			)))?;
 
@@ -240,7 +238,7 @@ impl AsbConnection {
 					.qos
 					.get(name)
 					.map(|q| *q)
-					.ok_or(CalError::config_err(format!(
+					.ok_or(CalError::config_err(format_args!(
 						"Could not find QoS settings for {name}"
 					)))
 			})?;
@@ -363,7 +361,7 @@ impl AsbConnection {
 					.as_ref()
 					.or(config.services.default_wire_format.as_ref())
 			})
-			.ok_or(CalError::config_err(format!(
+			.ok_or(CalError::config_err(format_args!(
 				"No wire format specified for topic {topic} under service {svc_name}."
 			)))?;
 
@@ -465,7 +463,7 @@ pub struct AsbReader<T> {
 impl<T> AsbReader<T> {
 	fn callback_mode_error(&self) -> Result<(), CalError> {
 		match self.callback_handle.is_some() {
-			true => Err(CalError::ill_err(format!("Reader has active listeners"))),
+			true => Err(CalError::ill_err("Reader has active listeners")),
 			false => Ok(()),
 		}
 	}
@@ -474,7 +472,7 @@ impl<T> AsbReader<T> {
 		// Error if in callback mode.
 		self.callback_mode_error()?;
 
-		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+		let err = CalError::other_err("Reader closed unexpectedly");
 
 		// Do actual read.
 		if let Some(expiration) = self.expiration {
@@ -501,7 +499,7 @@ impl<T> AsbReader<T> {
 		self.callback_mode_error()?;
 
 		// The error to return if the buffer is closed.
-		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+		let err = CalError::other_err("Reader closed unexpectedly");
 
 		// Split logic depending on whether there is an expiration check.
 		if let Some(expiration) = self.expiration {
@@ -533,9 +531,7 @@ impl<T> AsbReader<T> {
 				Ok(m) => Ok(Some(m.1)),
 				Err(e) => match e {
 					RecvTimeoutError::Timeout => Ok(None),
-					_ => Err(CalError::other_err(
-						"Reader closed unexpectedly".to_string(),
-					)),
+					_ => Err(CalError::other_err("Reader closed unexpectedly")),
 				},
 			}
 		}
@@ -547,7 +543,7 @@ impl<T> AsbReader<T> {
 		self.callback_mode_error()?;
 
 		// The error to return if the buffer is closed.
-		let err = CalError::other_err("Reader closed unexpectedly".to_string());
+		let err = CalError::other_err("Reader closed unexpectedly");
 
 		// Split logic depending on whether there is an expiration check.
 		if let Some(expiration) = self.expiration {

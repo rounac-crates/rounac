@@ -27,35 +27,29 @@ use toml::Value;
 pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArguments, CalError> {
 	// Verify this network is the correct type.
 	if network.kind != NetworkKind::Amqp {
-		return Err(CalError::config_err(format!(
-			"Expected network kind \"amqp\"."
-		)));
+		return Err(CalError::config_err("Expected network kind \"amqp\"."));
 	}
 
 	// Get parameters
 	let host = match network.params.get("host") {
 		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err(format!(
-			"Expected string parameter \"host\"."
-		))),
+		_ => Err(CalError::config_err("Expected string parameter \"host\".")),
 	}?;
 	let port = match network.params.get("port") {
 		Some(Value::Integer(i)) => Ok(i),
-		_ => Err(CalError::config_err(format!(
-			"Expected integer parameter \"port\"."
-		))),
+		_ => Err(CalError::config_err("Expected integer parameter \"port\".")),
 	}?;
 	let user = match network.params.get("username") {
 		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err(format!(
-			"Expected string parameter \"username\"."
-		))),
+		_ => Err(CalError::config_err(
+			"Expected string parameter \"username\".",
+		)),
 	}?;
 	let pass = match network.params.get("password") {
 		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err(format!(
-			"Expected string parameter \"password\"."
-		))),
+		_ => Err(CalError::config_err(
+			"Expected string parameter \"password\".",
+		)),
 	}?;
 
 	Ok(OpenConnectionArguments::new(host, *port as u16, user, pass))
