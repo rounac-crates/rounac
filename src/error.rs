@@ -43,7 +43,7 @@ impl CalError {
 	/// Return a [CalError] with kind `Illegal`.
 	pub fn ill_err(msg: String) -> Self {
 		CalError {
-			kind: CalErrorKind::Network,
+			kind: CalErrorKind::Illegal,
 			data: Arc::from(Box::<dyn Error>::from(msg)),
 		}
 	}
