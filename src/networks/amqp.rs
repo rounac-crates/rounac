@@ -106,9 +106,9 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 				if last.elapsed() < dur {
 					return;
 				}
-			} else {
-				self.last_received = Some(Instant::now());
 			}
+
+			self.last_received = Some(Instant::now());
 		}
 
 		// Deserialize message before sending to all readers.
