@@ -28,7 +28,7 @@ name = "basic_status_subscribe"
 
 [dev-dependencies]
 chrono = "0.4.45"
-rounac-uci = "0.0.2"
+rounac-uci = "0.0.4"
 
 [lints.clippy]
 print_stdout = "warn"
