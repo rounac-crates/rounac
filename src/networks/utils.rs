@@ -136,12 +136,11 @@ impl StatusCallbackManager {
 /// Posession counter.
 ///
 /// Increments on [clone] and decrements on [drop].
-// This should be [Send] but not [Sync]; PhantomData used to disallow Sync.
-pub struct PossessCtr(Arc<AtomicUsize>, PhantomData<Cell<()>>);
+pub struct PossessCtr(Arc<AtomicUsize>);
 impl PossessCtr {
 	/// Get a new counter with an internal count of `1`.
 	pub fn new() -> Self {
-		PossessCtr(Arc::new(AtomicUsize::new(1)), PhantomData)
+		PossessCtr(Arc::new(AtomicUsize::new(1)))
 	}
 
 	/// Returns `true` when this instance is the only one that exists.
@@ -153,7 +152,7 @@ impl Clone for PossessCtr {
 	fn clone(&self) -> Self {
 		// Increment count then return with cloned [Arc].
 		self.0.fetch_add(1, Ordering::Relaxed);
-		PossessCtr(self.0.clone(), PhantomData)
+		PossessCtr(self.0.clone())
 	}
 }
 impl Drop for PossessCtr {
