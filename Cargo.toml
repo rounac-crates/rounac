@@ -6,7 +6,7 @@ rust-version = "1.96.0"
 description = "A Rust interpretation of the OMS CAL specification."
 repository = "https://github.com/rounac-crates/rounac"
 readme = "README.md"
-license = "MIT or Apache-2.0"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 amqprs = "2.1.5"
