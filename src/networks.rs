@@ -28,7 +28,10 @@ use std::{
 	collections::{HashMap, hash_map},
 	marker::PhantomData,
 	ops::Deref,
-	sync::{Arc, Mutex},
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicBool, Ordering},
+	},
 	time::{Duration, Instant},
 };
 use tokio::sync::Notify;
@@ -319,7 +322,7 @@ impl AsbConnection {
 					all_senders,
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
-					callback_handle: None,
+					callbacks_active: Arc::new(AtomicBool::default()),
 					listeners: Default::default(),
 					counter,
 				})
@@ -334,7 +337,7 @@ impl AsbConnection {
 					all_senders: Default::default(),
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Null),
-					callback_handle: None,
+					callbacks_active: Arc::new(AtomicBool::default()),
 					listeners: Default::default(),
 					counter,
 				})
@@ -459,7 +462,7 @@ pub struct AsbReader<T> {
 	/// Arc so that any unsubscribes happen only after last reader drops.
 	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
-	callback_handle: Option<PossessCtr>,
+	callbacks_active: Arc<AtomicBool>,
 	/// All registered listeners keyed by a random number.
 	listeners: Arc<Mutex<Vec<Listener<T>>>>,
 	/// Not used, simply holds so [AsbConnection] can track topic usage.
@@ -467,11 +470,20 @@ pub struct AsbReader<T> {
 }
 impl<T> AsbReader<T> {
 	fn callback_mode_error(&self) -> Result<(), CalError> {
-		match self.callback_handle.is_some() {
+		match self.in_callback_mode() {
 			true => Err(CalError::ill_err("Reader has active listeners")),
 			false => Ok(()),
 		}
 	}
+
+	fn in_callback_mode(&self) -> bool {
+		self.callbacks_active.load(Ordering::Acquire)
+	}
+
+	fn set_callback_mode(&self, active: bool) {
+		self.callbacks_active.store(active, Ordering::Release);
+	}
+
 	/// Read the next message from the buffer or block until there is one.
 	pub fn read(&self) -> Result<Arc<T>, CalError> {
 		// Error if in callback mode.
@@ -613,7 +625,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 	// they are read/overwritten. This also obviously increases the length of
 	// `all_senders`, potentially up to double if every reader is used with
 	// listeners.
-	pub fn add_listener(&mut self, fun: impl AsbListener<T>) -> u32 {
+	pub fn add_listener(&self, fun: impl AsbListener<T>) -> u32 {
 		// Add function to listeners vec.
 		let id = rand::random();
 		{
@@ -625,9 +637,9 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 		let bg_listeners = self.listeners.clone();
 		let receiver = self.buffer.clone();
 		let expire = self.expiration;
-		if self.callback_handle.is_none() {
-			let handle = PossessCtr::new();
-			self.callback_handle = Some(handle.clone());
+		if !self.in_callback_mode() {
+			self.set_callback_mode(true);
+			let cb_mode = self.callbacks_active.clone();
 			std::thread::spawn(move || {
 				// TODO: Do some basic profiling to find a good value for this.
 				//       Shorter makes loop more "busy" but gives better reaction in cases
@@ -637,8 +649,8 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 				// Have conditional outside of loop since this can be a very hot loop.
 				if let Some(expiration) = expire {
 					loop {
-						// When reader drops its counter, this will trigger to stop the loop.
-						if handle.is_unique() {
+						// When reader disables callback mode, stop thread.
+						if !cb_mode.load(Ordering::Relaxed) {
 							break;
 						}
 
@@ -658,8 +670,8 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 					}
 				} else {
 					loop {
-						// When reader drops its counter, this will trigger to stop the loop.
-						if handle.is_unique() {
+						// When reader disables callback mode, stop thread.
+						if !cb_mode.load(Ordering::Relaxed) {
 							break;
 						}
 
@@ -684,7 +696,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 	}
 
 	/// Remove the listener identified with `id`, returning `true` if it exists.
-	pub fn remove_listener(&mut self, id: u32) -> bool {
+	pub fn remove_listener(&self, id: u32) -> bool {
 		let mut listeners = self.listeners.lock().unwrap();
 		if let Some(idx) = listeners.iter().position(|b| b.0 == id) {
 			_ = listeners.swap_remove(idx);
@@ -692,7 +704,7 @@ impl<T: Send + Sync + 'static> AsbReader<T> {
 			// If no more listeners, empty callback handle so bg thread will stop and
 			// reads can continue as normal.
 			if listeners.is_empty() {
-				_ = self.callback_handle.take();
+				self.set_callback_mode(false);
 			}
 
 			true
@@ -719,7 +731,7 @@ impl<T> Clone for AsbReader<T> {
 			all_senders: self.all_senders.clone(),
 			my_sender_id,
 			net: self.net.clone(),
-			callback_handle: None,
+			callbacks_active: Arc::new(AtomicBool::default()),
 			listeners: Arc::new(Mutex::new(Vec::new())),
 			counter: self.counter.clone(),
 		}
