@@ -4,7 +4,7 @@ pub(crate) mod amqp;
 pub(crate) mod utils;
 
 use crate::{
-	config::{AsbConfig, NetworkKind, ReliabilityQos, WireFormat},
+	config::{AsbConfig, NetworkConfig, NetworkKind, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::{
 		amqp::{ChanCb, ConnCb},
@@ -40,6 +40,85 @@ use tokio::sync::Notify;
 pub enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
 	Null,
+}
+impl AsbNetMode {
+	/// Create new object with variant [Amqp].
+	fn new_amqp(
+		config: &NetworkConfig,
+		status_manager: &Arc<StatusCallbackManager>,
+	) -> Result<Self, CalError> {
+		// Create current thread flavor runtime for now.
+		// TODO: Consider feature or config to choose runtime flavor.
+		let rt = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()?;
+		let rt_handle = rt.handle().clone();
+
+		// Check configuration for exchange and durability parameter.
+		let exchange = match config.params.get("exchange") {
+			Some(toml::Value::String(ex)) if !ex.is_empty() => Some(ex.to_owned()),
+			Some(_) => {
+				return Err(CalError::config_err(format_args!(
+					"AMQP parameter \"exchange\" must be a non-empty string."
+				)));
+			}
+			None => None,
+		};
+		let durable = match config.params.get("durable_exchange") {
+			Some(toml::Value::Boolean(ex)) => *ex,
+			Some(_) => {
+				return Err(CalError::config_err(format_args!(
+					"AMQP parameter \"durable_exchange\" must be a boolean."
+				)));
+			}
+			None => true,
+		};
+
+		// Prepare callbacks
+		let conn_cb = ConnCb {
+			status_manager: status_manager.clone(),
+		};
+		let chan_cb = ChanCb {
+			status_manager: status_manager.clone(),
+		};
+
+		// Open the connection and create a single channel for everything.
+		let open_args = open_args_for_net(config)?;
+		let (conn, chan) = rt.block_on(async {
+			let conn = Connection::open(&open_args).await?;
+			conn.register_callback(conn_cb).await?;
+			let chan = conn.open_channel(None).await?;
+			chan.register_callback(chan_cb).await?;
+			chan.flow(true).await?; // Kickstart traffic flowing
+
+			// If config has exchange name, create direct exchange.
+			if let Some(ref ex) = exchange {
+				let declare_args =
+					ExchangeDeclareArguments::of_type(ex, amqprs::channel::ExchangeType::Direct)
+						.durable(durable)
+						.finish();
+
+				chan.exchange_declare(declare_args).await?;
+			}
+
+			Ok::<_, amqprs::error::Error>((conn, chan))
+		})?;
+
+		// Spawn background thread to drive the tokio runtime.
+		let notifier = Arc::new(Notify::new());
+		let bg_notifier = notifier.clone();
+		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
+
+		Ok(AsbNetMode::Amqp(
+			Arc::new(amqp::AmqpAsb {
+				rt_handle,
+				conn,
+				chan,
+				exchange,
+			}),
+			notifier,
+		))
+	}
 }
 impl Drop for AsbNetMode {
 	fn drop(&mut self) {
@@ -83,85 +162,11 @@ impl AsbConnection {
 		status_manager.set_status(AsbConnStatus::Normal);
 
 		match network.kind {
-			NetworkKind::Amqp => {
-				// Create current thread flavor runtime for now.
-				// TODO: Consider feature or config to choose runtime flavor.
-				let rt = tokio::runtime::Builder::new_current_thread()
-					.enable_all()
-					.build()?;
-				let rt_handle = rt.handle().clone();
-
-				// Check configuration for exchange and durability parameter.
-				let exchange = match network.params.get("exchange") {
-					Some(toml::Value::String(ex)) if !ex.is_empty() => Some(ex.to_owned()),
-					Some(_) => {
-						return Err(CalError::config_err(format_args!(
-							"AMQP parameter \"exchange\" must be a non-empty string."
-						)));
-					}
-					None => None,
-				};
-				let durable = match network.params.get("durable_exchange") {
-					Some(toml::Value::Boolean(ex)) => *ex,
-					Some(_) => {
-						return Err(CalError::config_err(format_args!(
-							"AMQP parameter \"durable_exchange\" must be a boolean."
-						)));
-					}
-					None => true,
-				};
-
-				// Prepare callbacks
-				let conn_cb = ConnCb {
-					status_manager: status_manager.clone(),
-				};
-				let chan_cb = ChanCb {
-					status_manager: status_manager.clone(),
-				};
-
-				// Open the connection and create a single channel for everything.
-				let open_args = open_args_for_net(network)?;
-				let (conn, chan) = rt.block_on(async {
-					let conn = Connection::open(&open_args).await?;
-					conn.register_callback(conn_cb).await?;
-					let chan = conn.open_channel(None).await?;
-					chan.register_callback(chan_cb).await?;
-					chan.flow(true).await?; // Kickstart traffic flowing
-
-					// If config has exchange name, create direct exchange.
-					if let Some(ref ex) = exchange {
-						let declare_args = ExchangeDeclareArguments::of_type(
-							ex,
-							amqprs::channel::ExchangeType::Direct,
-						)
-						.durable(durable)
-						.finish();
-
-						chan.exchange_declare(declare_args).await?;
-					}
-
-					Ok::<_, amqprs::error::Error>((conn, chan))
-				})?;
-
-				// Spawn background thread to drive the tokio runtime.
-				let notifier = Arc::new(Notify::new());
-				let bg_notifier = notifier.clone();
-				std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
-
-				Ok(AsbConnection {
-					net: AsbNetMode::Amqp(
-						Arc::new(amqp::AmqpAsb {
-							rt_handle,
-							conn,
-							chan,
-							exchange,
-						}),
-						notifier,
-					),
-					topics: Default::default(),
-					status_manager,
-				})
-			}
+			NetworkKind::Amqp => Ok(AsbConnection {
+				net: AsbNetMode::new_amqp(network, &status_manager)?,
+				topics: Default::default(),
+				status_manager,
+			}),
 			NetworkKind::Null => Ok(AsbConnection {
 				net: AsbNetMode::Null,
 				topics: Default::default(),
