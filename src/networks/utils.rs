@@ -1,13 +1,16 @@
 //! General network utilities
 
+use super::ReaderSender;
+use crate::config::WireFormat;
+use crossbeam_ring_channel::RingSender;
+use serde::de::DeserializeOwned;
 use std::{
-	cell::Cell,
-	marker::PhantomData,
 	sync::{
 		Arc, RwLock,
 		atomic::{AtomicUsize, Ordering},
 	},
 	thread,
+	time::Instant,
 };
 
 /// The trait required to register a type with [Asb::add_status_listener].
@@ -160,6 +163,71 @@ impl Drop for PossessCtr {
 		self.0.fetch_sub(1, Ordering::Release);
 	}
 }
+
+pub(super) trait RingMaster: Send + Sync {
+	fn distribute_msg(&self, recv_time: Instant, data: &[u8]);
+
+	fn into_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync>;
+}
+
+pub(super) struct ReaderRingMaster<T> {
+	pub senders: RwLock<Vec<ReaderSender<T>>>,
+	pub wire_format: WireFormat,
+}
+impl<T> ReaderRingMaster<T> {
+	/// Creates an object with the specified format and no senders.
+	pub fn new(wire_format: WireFormat) -> Self {
+		ReaderRingMaster {
+			senders: RwLock::new(Vec::new()),
+			wire_format,
+		}
+	}
+
+	/// Add a sender, returning the id associated with it for later removal.
+	pub fn add_sender(&self, sender: RingSender<(Instant, Arc<T>)>) -> u32 {
+		let id = rand::random();
+		self.senders.write().unwrap().push((id, sender));
+
+		id
+	}
+
+	/// Remove sender with id `id`.
+	pub fn remove_sender(&self, id: u32) -> bool {
+		let mut senders = self.senders.write().unwrap();
+
+		if let Some(idx) = senders.iter().position(|b| b.0 == id) {
+			_ = senders.swap_remove(idx);
+			true
+		} else {
+			false
+		}
+	}
+}
+impl<T: DeserializeOwned + Send + Sync + 'static> RingMaster for ReaderRingMaster<T> {
+	fn distribute_msg(&self, recv_time: Instant, data: &[u8]) {
+		// Deserialize message first, doing nothing if there is an error.
+		let Ok(msg) = crate::msg_serde::deserialize_msg::<T>(&self.wire_format, data) else {
+			return;
+		};
+		let msg = Arc::new(msg);
+
+		// Now send message to all the ringbuffers.
+		let senders = self.senders.read().unwrap();
+		for sender in senders.iter() {
+			_ = sender.1.send((recv_time, msg.clone()));
+		}
+	}
+
+	/// Used to permit downcasting back to concrete type (likely
+	/// [`ReaderRingMaster<T>`]).
+	fn into_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+		self
+	}
+}
+
+/*
+ * Tests
+ */
 
 #[cfg(test)]
 mod possess_ctr_tests {

@@ -136,6 +136,9 @@ pub enum NetworkKind {
 	/// AMQP 0-9-1
 	#[serde(rename = "amqp", alias = "AMQP")]
 	Amqp,
+	/// MQTT 3.1.1
+	#[serde(rename = "mqtt", alias = "MQTT")]
+	Mqtt,
 	/// The lack of any network. Useful for testing or quick config changes.
 	#[serde(rename = "null", alias = "NULL")]
 	Null,

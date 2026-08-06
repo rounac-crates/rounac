@@ -1,6 +1,7 @@
 //! Module for the network related types.
 
-pub(crate) mod amqp;
+mod amqp;
+mod mqtt;
 pub(crate) mod utils;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
 	error::CalError,
 	networks::{
 		amqp::{ChanCb, ConnCb},
+		mqtt::MqttAsb,
 		utils::{AsbConnStatus, AsbStatusListener, PossessCtr, StatusCallbackManager},
 	},
 };
@@ -22,6 +24,7 @@ use amqprs::{
 };
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::{RingReceiver, RingSender};
+use rumqttc::MqttOptions;
 use serde::{Deserialize, Serialize};
 use std::{
 	any,
@@ -39,6 +42,7 @@ use tokio::sync::Notify;
 /// Manages the transport-specific data and lifetime.
 pub enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
+	Mqtt(Arc<mqtt::MqttAsb>, Arc<Notify>),
 	Null,
 }
 impl AsbNetMode {
@@ -119,6 +123,68 @@ impl AsbNetMode {
 			notifier,
 		))
 	}
+
+	/// Create new object with variant [Mqtt].
+	fn new_mqtt(
+		config: &NetworkConfig,
+		status_manager: &Arc<StatusCallbackManager>,
+	) -> Result<Self, CalError> {
+		// Create current thread flavor runtime for now.
+		// TODO: Consider feature or config to choose runtime flavor.
+		let rt = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()?;
+		let rt_handle = rt.handle().clone();
+
+		// Get the URL parameter for the broker.
+		let url = match config.params.get("url") {
+			Some(toml::Value::String(u)) if !u.is_empty() => u,
+			_ => {
+				return Err(CalError::config_err(format_args!(
+					"MQTT parameter \"url\" must be a non-empty string."
+				)));
+			}
+		};
+
+		// Try to parse the URL into MQTT options.
+		let mut opts = MqttOptions::parse_url(url)?;
+		opts.set_manual_acks(false); // Let library handle these for us always.
+
+		// Create the client and event loop (nothing is sent yet).
+		// TODO: Determine good minimum cap, then use max(qos, CAP_MIN).
+		const CLIENT_CAP: usize = 200;
+		let (client, mut evt_loop) = rumqttc::AsyncClient::new(opts, CLIENT_CAP);
+		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle, client));
+		let bg_mqtt_asb = mqtt_asb.clone();
+
+		// Spawn the message handling task on the runtime. This ensures it gets a
+		// worker thread (in the case of multi-threaded).
+		_ = rt.spawn(async move {
+			loop {
+				match evt_loop.poll().await {
+					Ok(rumqttc::Event::Incoming(evt)) => {
+						match evt {
+							rumqttc::Incoming::Publish(p) => {
+								// Distribute message to readers.
+								bg_mqtt_asb.handle_msg(&p.topic, &p.payload);
+							}
+							_ => {}
+						}
+					}
+					// Don't care about outgoing events.
+					Ok(rumqttc::Event::Outgoing(_)) => {}
+					Err(_) => {}
+				}
+			}
+		});
+
+		// Spawn background thread to drive the tokio runtime.
+		let notifier = Arc::new(Notify::new());
+		let bg_notifier = notifier.clone();
+		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
+
+		Ok(AsbNetMode::Mqtt(mqtt_asb, notifier))
+	}
 }
 impl Drop for AsbNetMode {
 	fn drop(&mut self) {
@@ -164,6 +230,11 @@ impl AsbConnection {
 		match network.kind {
 			NetworkKind::Amqp => Ok(AsbConnection {
 				net: AsbNetMode::new_amqp(network, &status_manager)?,
+				topics: Default::default(),
+				status_manager,
+			}),
+			NetworkKind::Mqtt => Ok(AsbConnection {
+				net: AsbNetMode::new_mqtt(network, &status_manager)?,
 				topics: Default::default(),
 				status_manager,
 			}),

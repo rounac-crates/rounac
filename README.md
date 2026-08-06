@@ -73,7 +73,7 @@ with a local RabbitMQ 4 broker in podman (host network mode):
 
 ## ZeroMQ (desired)
 `zeromq` (Rust native) or `zmq` (libzmq wrapper).
-## MQTT (desired)
+## MQTT (in progress)
 `rumqttc`
 ## NATS (desired)
 `async-nats`

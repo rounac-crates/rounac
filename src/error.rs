@@ -100,4 +100,5 @@ calerror_conversions! {
 	quick_xml::errors::Error => CalErrorKind::Serde
 	quick_xml::errors::serialize::DeError => CalErrorKind::Serde
 	quick_xml::errors::serialize::SeError => CalErrorKind::Serde
+	rumqttc::OptionError => CalErrorKind::Config
 }
