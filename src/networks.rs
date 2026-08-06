@@ -159,6 +159,8 @@ impl AsbNetMode {
 		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle, client));
 		let bg_mqtt_asb = mqtt_asb.clone();
 
+		let (init_send, init_recv) = std::sync::mpsc::sync_channel(0);
+
 		// Spawn the message handling task on the runtime. This ensures it gets a
 		// worker thread (in the case of multi-threaded).
 		_ = rt.spawn(async move {
@@ -166,6 +168,9 @@ impl AsbNetMode {
 				match evt_loop.poll().await {
 					Ok(rumqttc::Event::Incoming(evt)) => {
 						match evt {
+							rumqttc::Incoming::ConnAck(_) => {
+								init_send.send(None).unwrap();
+							}
 							rumqttc::Incoming::Publish(p) => {
 								// Distribute message to readers.
 								bg_mqtt_asb.handle_msg(&p.topic, &p.payload);
@@ -179,7 +184,10 @@ impl AsbNetMode {
 					}
 					// Generally don't care about outgoing events.
 					Ok(rumqttc::Event::Outgoing(_)) => {}
-					Err(_) => {}
+					Err(e) => {
+						init_send.send(Some(e)).unwrap();
+						break;
+					}
 				}
 			}
 		});
@@ -188,6 +196,13 @@ impl AsbNetMode {
 		let notifier = Arc::new(Notify::new());
 		let bg_notifier = notifier.clone();
 		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
+
+		// If bad connection, stop bg thread and return error.
+		if let Some(err) = init_recv.recv().unwrap() {
+			notifier.notify_waiters();
+
+			return Err(CalError::net_err(err));
+		}
 
 		Ok(AsbNetMode::Mqtt(mqtt_asb, notifier))
 	}
