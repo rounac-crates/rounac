@@ -5,7 +5,10 @@ use super::utils::RingMaster;
 use rumqttc::AsyncClient;
 use std::{
 	collections::HashMap,
-	sync::{Arc, RwLock},
+	sync::{
+		Arc, RwLock,
+		atomic::{AtomicU16, Ordering},
+	},
 	time::Instant,
 };
 use tokio::runtime::Handle;
@@ -13,7 +16,8 @@ use tokio::runtime::Handle;
 pub(super) struct MqttAsb {
 	pub rt_handle: Handle,
 	pub client: AsyncClient,
-	pub readers: RwLock<HashMap<String, Arc<dyn RingMaster>>>,
+	// Tuple of (ringmaster, reader_count)
+	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16)>>,
 }
 impl MqttAsb {
 	pub fn new(rt_handle: Handle, client: AsyncClient) -> Self {
@@ -24,11 +28,46 @@ impl MqttAsb {
 		}
 	}
 
+	pub fn get_clone_for(&self, topic: &str) -> Option<Arc<dyn RingMaster>> {
+		self.readers.read().unwrap().get(topic).map(|v| v.0.clone())
+	}
+
+	/// Increment internal reader count, returning [Ok] if successful.
+	pub fn add_reader(&self, topic: &str) -> Result<(), ()> {
+		if let Some(t) = self.readers.read().unwrap().get(topic) {
+			t.1.fetch_add(1, Ordering::Acquire);
+			Ok(())
+		} else {
+			Err(())
+		}
+	}
+
+	/// Decrement internal reader count, where return of `Ok(true)` indicates this
+	/// was the last reader.
+	pub fn del_reader(&self, topic: &str) -> Result<bool, ()> {
+		// Get write lock to avoid a lock-unlock-lock situation when this is the last
+		// reader. Reader deletion is not expected to occur frequently.
+		let mut readers = self.readers.write().unwrap();
+		if let Some(t) = readers.get(topic) {
+			let v = t.1.fetch_sub(1, Ordering::Acquire);
+			// If this was the last reader for the topic, remove entry
+			if v == 0 {
+				readers.remove(topic);
+
+				Ok(true)
+			} else {
+				Ok(false)
+			}
+		} else {
+			Err(())
+		}
+	}
+
 	/// Passes `data` along to readers of the given `topic`.
 	pub fn handle_msg(&self, topic: &str, data: &[u8]) {
 		let readers = self.readers.read().unwrap();
 		if let Some(ring_master) = readers.get(topic) {
-			ring_master.distribute_msg(Instant::now(), data);
+			ring_master.0.distribute_msg(Instant::now(), data);
 		}
 	}
 }

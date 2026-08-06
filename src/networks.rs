@@ -10,7 +10,9 @@ use crate::{
 	networks::{
 		amqp::{ChanCb, ConnCb},
 		mqtt::MqttAsb,
-		utils::{AsbConnStatus, AsbStatusListener, PossessCtr, StatusCallbackManager},
+		utils::{
+			AsbConnStatus, AsbStatusListener, PossessCtr, ReaderRingMaster, StatusCallbackManager,
+		},
 	},
 };
 use amqp::{AmqpConsumer, open_args_for_net};
@@ -33,14 +35,14 @@ use std::{
 	ops::Deref,
 	sync::{
 		Arc, Mutex,
-		atomic::{AtomicBool, Ordering},
+		atomic::{AtomicBool, AtomicU16, Ordering},
 	},
 	time::{Duration, Instant},
 };
 use tokio::sync::Notify;
 
 /// Manages the transport-specific data and lifetime.
-pub enum AsbNetMode {
+enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
 	Mqtt(Arc<mqtt::MqttAsb>, Arc<Notify>),
 	Null,
@@ -171,7 +173,11 @@ impl AsbNetMode {
 							_ => {}
 						}
 					}
-					// Don't care about outgoing events.
+					// This gets sent by [Drop] impl, so stop loop.
+					Ok(rumqttc::Event::Outgoing(rumqttc::Outgoing::Disconnect)) => {
+						break;
+					}
+					// Generally don't care about outgoing events.
 					Ok(rumqttc::Event::Outgoing(_)) => {}
 					Err(_) => {}
 				}
@@ -197,6 +203,13 @@ impl Drop for AsbNetMode {
 				});
 
 				// Notify
+				n.notify_waiters();
+			}
+			AsbNetMode::Mqtt(asb, n) => {
+				asb.rt_handle.block_on(async {
+					_ = asb.client.disconnect().await;
+				});
+
 				n.notify_waiters();
 			}
 			_ => {}
@@ -323,7 +336,7 @@ impl AsbConnection {
 			})?;
 
 		// Get the topic name for the bus.
-		let topic_name = service_cfg
+		let bus_topic = service_cfg
 			.and_then(|cfg| {
 				// Try to get the bus topic
 				cfg.topics
@@ -340,7 +353,7 @@ impl AsbConnection {
 				// it.
 				let queue_name = match asb.exchange.is_some() {
 					true => "",
-					false => topic_name,
+					false => bus_topic,
 				};
 
 				// Prepare declare queue args.
@@ -382,7 +395,7 @@ impl AsbConnection {
 
 					// If an exchange is specified, bind queue to it.
 					if let Some(ref ex) = asb.exchange {
-						let args = QueueBindArguments::new(&res.0, ex, topic_name);
+						let args = QueueBindArguments::new(&res.0, ex, bus_topic);
 						asb.chan.queue_bind(args).await?;
 					}
 
@@ -399,6 +412,58 @@ impl AsbConnection {
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
 					callbacks_active: Arc::new(AtomicBool::default()),
+					listeners: Default::default(),
+					counter,
+				})
+			}
+			AsbNetMode::Mqtt(asb, _) => {
+				let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(topic) {
+					// There is a reader somewhere (TODO: Make sure map empty when last
+					// reader dies).
+					// SAFETY: [get_topic_ctr] at start of fn ensures TypeId of `T` matches
+					//         any readers on this topic, therefore [`ReaderRingMaster<T>`]
+					//         is exactly the same as stored in `asb`.
+					Some(r) => r.into_arc_any().downcast().unwrap(),
+					// First of its kind for this topic.
+					None => {
+						// Choose QoS accordingly.
+						let mqtt_qos = match qos.reliability {
+							ReliabilityQos::BestEffort => rumqttc::QoS::AtMostOnce,
+							ReliabilityQos::Reliable => rumqttc::QoS::AtLeastOnce,
+						};
+
+						// Subscribe to topic
+						_ = asb
+							.rt_handle
+							.block_on(asb.client.subscribe(topic, mqtt_qos));
+						// TODO: Figure out how to wait till SubAck is received.
+
+						let rng_mstr = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+
+						// Add ringmaster to bg thread
+						asb.readers
+							.write()
+							.unwrap()
+							.insert(bus_topic.to_string(), (rng_mstr.clone(), AtomicU16::new(1)));
+
+						rng_mstr
+					}
+				};
+
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
+				let my_sender_id = reader_ringmaster.add_sender(prod);
+
+				Ok(AsbReader {
+					buffer: cons,
+					expiration: qos.expiration,
+					all_senders: Default::default(),
+					my_sender_id,
+					net: Arc::new(AsbReaderNet::Mqtt(
+						asb.clone(),
+						reader_ringmaster,
+						bus_topic.to_string(),
+					)),
+					callbacks_active: Default::default(),
 					listeners: Default::default(),
 					counter,
 				})
@@ -455,6 +520,30 @@ impl AsbConnection {
 			})
 			.unwrap_or(topic);
 
+		// Get the QoS config for `topic`, or use the default.
+		let qos = service_cfg
+			.and_then(|cfg| {
+				// Try to get the a QoS name to lookup.
+				cfg.topics
+					.get(topic)
+					.and_then(|tcfg| tcfg.qos.as_ref())
+					// otherwise use the service-level qos
+					.or(cfg.qos.as_ref())
+					// otherwise use the default
+					.or(config.services.default_qos.as_ref())
+			})
+			// Map name to actual [QosSettings], error if it's not in the config.
+			// Use the default QoS otherwise.
+			.map_or(Ok(Default::default()), |name| {
+				config
+					.qos
+					.get(name)
+					.copied()
+					.ok_or(CalError::config_err(format_args!(
+						"Could not find QoS settings for {name}"
+					)))
+			})?;
+
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
 				let exchange_name = asb
@@ -469,6 +558,19 @@ impl AsbConnection {
 
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),
+					format: *wire_format,
+					_counter: counter,
+					_asb: PhantomData,
+				})
+			}
+			AsbNetMode::Mqtt(asb, _) => {
+				let mqtt_qos = match qos.reliability {
+					ReliabilityQos::BestEffort => rumqttc::QoS::AtMostOnce,
+					ReliabilityQos::Reliable => rumqttc::QoS::AtLeastOnce,
+				};
+
+				Ok(AsbWriter {
+					net: AsbWriterNet::Mqtt(asb.clone(), mqtt_qos, topic.to_string()),
 					format: *wire_format,
 					_counter: counter,
 					_asb: PhantomData,
@@ -533,10 +635,11 @@ pub struct AsbReader<T> {
 	expiration: Option<Duration>,
 	/// Shared with consumer for this topic. `u32` is random to identify sender
 	/// for this [AsbReader].
+	// TODO: Refactor this with [`Arc<ReaderRingMaster<T>>`].
 	all_senders: Arc<Mutex<Vec<ReaderSender<T>>>>,
 	my_sender_id: u32,
 	/// Arc so that any unsubscribes happen only after last reader drops.
-	net: Arc<AsbReaderNet>,
+	net: Arc<AsbReaderNet<T>>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	callbacks_active: Arc<AtomicBool>,
 	/// All registered listeners keyed by a random number.
@@ -823,21 +926,41 @@ impl<T> Drop for AsbReader<T> {
 				buffers.swap_remove(idx);
 			}
 		}
+
+		// TODO: Ideally the above of all_senders gets replaced with this, or both of
+		//       these get moved into [AsbReaderNet]. Try to avoid transport-specific
+		//       drop logic in here.
+		if let AsbReaderNet::Mqtt(_, mstr, _) = self.net.as_ref() {
+			mstr.remove_sender(self.my_sender_id);
+		}
 	}
 }
 
 /// Holds all network-specific data to manage the reader/subscriber.
-pub enum AsbReaderNet {
+enum AsbReaderNet<T> {
 	// .1 is consumer tag
 	Amqp(Arc<amqp::AmqpAsb>, String),
+	// .2 is topic
+	Mqtt(Arc<mqtt::MqttAsb>, Arc<ReaderRingMaster<T>>, String),
 	Null,
 }
-impl Drop for AsbReaderNet {
+impl<T> Drop for AsbReaderNet<T> {
 	fn drop(&mut self) {
 		match self {
 			AsbReaderNet::Amqp(asb, tag) => {
 				let cancel = BasicCancelArguments::new(tag);
 				_ = asb.rt_handle.block_on(asb.chan.basic_cancel(cancel));
+			}
+			AsbReaderNet::Mqtt(asb, _, topic) => {
+				// TODO: See TODO in AsbReader::drop.
+
+				// Decrement reader count.
+				if let Ok(true) = asb.del_reader(&topic) {
+					// Unsubscribe
+					_ = asb
+						.rt_handle
+						.block_on(asb.client.unsubscribe(topic.as_str()));
+				}
 			}
 			AsbReaderNet::Null => {}
 		}
@@ -854,23 +977,25 @@ pub struct AsbWriter<T> {
 	_asb: PhantomData<T>,
 }
 #[derive(Clone)]
-pub enum AsbWriterNet {
+enum AsbWriterNet {
 	Amqp(Arc<amqp::AmqpAsb>, BasicProperties, BasicPublishArguments),
+	// .2 is topic.
+	Mqtt(Arc<mqtt::MqttAsb>, rumqttc::QoS, String),
 	Null,
 }
 impl<T: Serialize> AsbWriter<T> {
 	/// Publishes `msg` to the topic specified in [create_writer()](AsbConnection::create_writer).
 	pub fn write(&self, msg: &T) -> Result<(), CalError> {
-		match &self.net {
-			AsbWriterNet::Amqp(asb, props, args) => {
-				let data = crate::msg_serde::serialize_msg(&self.format, msg)?;
+		let data = crate::msg_serde::serialize_msg(&self.format, msg)?;
 
-				Ok(asb.rt_handle.block_on(asb.chan.basic_publish(
-					props.clone(),
-					data,
-					args.clone(),
-				))?)
-			}
+		match &self.net {
+			AsbWriterNet::Amqp(asb, props, args) => Ok(asb
+				.rt_handle
+				.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?),
+			AsbWriterNet::Mqtt(asb, qos, topic) => asb
+				.rt_handle
+				.block_on(asb.client.publish(topic, *qos, false, data))
+				.map_err(|e| CalError::net_err(e)),
 			AsbWriterNet::Null => Ok(()),
 		}
 	}

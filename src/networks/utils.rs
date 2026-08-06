@@ -1,12 +1,12 @@
 //! General network utilities
 
 use super::ReaderSender;
-use crate::config::WireFormat;
+use crate::config::{QosSettings, WireFormat};
 use crossbeam_ring_channel::RingSender;
 use serde::de::DeserializeOwned;
 use std::{
 	sync::{
-		Arc, RwLock,
+		Arc, Mutex, RwLock,
 		atomic::{AtomicUsize, Ordering},
 	},
 	thread,
@@ -173,13 +173,19 @@ pub(super) trait RingMaster: Send + Sync {
 pub(super) struct ReaderRingMaster<T> {
 	pub senders: RwLock<Vec<ReaderSender<T>>>,
 	pub wire_format: WireFormat,
+	pub qos: QosSettings,
+	// Should be fine as mutex, critical section is short so rwlock won't give any
+	// real advantage.
+	last_received: Mutex<Option<Instant>>,
 }
 impl<T> ReaderRingMaster<T> {
 	/// Creates an object with the specified format and no senders.
-	pub fn new(wire_format: WireFormat) -> Self {
+	pub fn new(wire_format: WireFormat, qos: QosSettings) -> Self {
 		ReaderRingMaster {
 			senders: RwLock::new(Vec::new()),
 			wire_format,
+			qos,
+			last_received: Mutex::new(None),
 		}
 	}
 
@@ -205,6 +211,17 @@ impl<T> ReaderRingMaster<T> {
 }
 impl<T: DeserializeOwned + Send + Sync + 'static> RingMaster for ReaderRingMaster<T> {
 	fn distribute_msg(&self, recv_time: Instant, data: &[u8]) {
+		// Check whether this message is within the time QoS filtering.
+		if let Some(t) = self.qos.time_based_filter {
+			let mut last_received = self.last_received.lock().unwrap();
+			if let Some(last) = *last_received
+				&& recv_time.duration_since(last) < t
+			{
+				return;
+			}
+
+			*last_received = Some(recv_time);
+		}
 		// Deserialize message first, doing nothing if there is an error.
 		let Ok(msg) = crate::msg_serde::deserialize_msg::<T>(&self.wire_format, data) else {
 			return;
