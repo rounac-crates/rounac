@@ -1007,10 +1007,7 @@ impl<T: Serialize> AsbWriter<T> {
 			AsbWriterNet::Amqp(asb, props, args) => Ok(asb
 				.rt_handle
 				.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?),
-			AsbWriterNet::Mqtt(asb, qos, topic) => asb
-				.rt_handle
-				.block_on(asb.client.publish(topic, *qos, false, data))
-				.map_err(|e| CalError::net_err(e)),
+			AsbWriterNet::Mqtt(asb, qos, topic) => asb.publish(topic, *qos, false, data),
 			AsbWriterNet::Null => Ok(()),
 		}
 	}

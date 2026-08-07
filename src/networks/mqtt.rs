@@ -2,7 +2,8 @@
 //!
 
 use super::utils::RingMaster;
-use rumqttc::AsyncClient;
+use crate::CalError;
+use rumqttc::{AsyncClient, QoS};
 use std::{
 	collections::HashMap,
 	sync::{
@@ -26,6 +27,17 @@ impl MqttAsb {
 			client,
 			readers: RwLock::new(HashMap::new()),
 		}
+	}
+
+	/// Publish to the ASB using the given parameters.
+	pub fn publish<S, V>(&self, topic: S, qos: QoS, retain: bool, data: V) -> Result<(), CalError>
+	where
+		S: Into<String>,
+		V: Into<Vec<u8>>,
+	{
+		self.rt_handle
+			.block_on(self.client.publish(topic, qos, retain, data))
+			.map_err(CalError::net_err)
 	}
 
 	pub fn get_clone_for(&self, topic: &str) -> Option<Arc<dyn RingMaster>> {
