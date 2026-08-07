@@ -73,8 +73,11 @@ with a local RabbitMQ 4 broker in podman (host network mode):
 
 ## ZeroMQ (desired)
 `zeromq` (Rust native) or `zmq` (libzmq wrapper).
-## MQTT (in progress)
-`rumqttc`
+## MQTT
+Eclipse Mosquitto broker is much faster than Apache Artemis.
+
+Limited testing with this transport thus far.
+
 ## NATS (desired)
 `async-nats`
 
