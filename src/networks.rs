@@ -149,6 +149,7 @@ impl AsbNetMode {
 		};
 
 		// Try to parse the URL into MQTT options.
+		// TODO: Don't use URL since it's not a standardized URL scheme.
 		let mut opts = MqttOptions::parse_url(url)?;
 		opts.set_manual_acks(false); // Let library handle these for us always.
 
@@ -157,9 +158,11 @@ impl AsbNetMode {
 		const CLIENT_CAP: usize = 200;
 		let (client, mut evt_loop) = rumqttc::AsyncClient::new(opts, CLIENT_CAP);
 		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle, client));
-		let bg_mqtt_asb = mqtt_asb.clone();
 
+		// Make bg clones.
+		let bg_mqtt_asb = mqtt_asb.clone();
 		let (init_send, init_recv) = std::sync::mpsc::sync_channel(0);
+		let bg_status_mgr = status_manager.clone();
 
 		// Spawn the message handling task on the runtime. This ensures it gets a
 		// worker thread (in the case of multi-threaded).
@@ -185,7 +188,9 @@ impl AsbNetMode {
 					// Generally don't care about outgoing events.
 					Ok(rumqttc::Event::Outgoing(_)) => {}
 					Err(e) => {
-						init_send.send(Some(e)).unwrap();
+						_ = init_send.send(Some(e));
+						bg_mqtt_asb.shutdown();
+						bg_status_mgr.set_status(AsbConnStatus::Failed);
 						break;
 					}
 				}
