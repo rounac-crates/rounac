@@ -116,6 +116,11 @@ impl MqttAsb {
 
 	/// Passes `data` along to readers of the given `topic`.
 	pub fn handle_msg(&self, topic: &str, data: &[u8]) {
+		// If shutdown, don't even lock readers.
+		if self.shutdown_fuse.load(Ordering::Acquire) {
+			return;
+		}
+
 		let readers = self.readers.read().unwrap();
 		if let Some(ring_master) = readers.get(topic) {
 			ring_master.0.distribute_msg(Instant::now(), data);

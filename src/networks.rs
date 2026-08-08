@@ -19,14 +19,13 @@ use amqp::{AmqpConsumer, open_args_for_net};
 use amqprs::{
 	BasicProperties,
 	channel::{
-		BasicCancelArguments, BasicConsumeArguments, BasicPublishArguments,
-		ExchangeDeclareArguments, QueueBindArguments, QueueDeclareArguments,
+		BasicConsumeArguments, BasicPublishArguments, ExchangeDeclareArguments, QueueBindArguments,
+		QueueDeclareArguments,
 	},
 	connection::Connection,
 };
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::{RingReceiver, RingSender};
-use rumqttc::MqttOptions;
 use serde::{Deserialize, Serialize};
 use std::{
 	any,
@@ -45,6 +44,7 @@ use tokio::sync::Notify;
 enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
 	Mqtt(Arc<mqtt::MqttAsb>, Arc<Notify>),
+	// TODO: Refactor to new `NullAsb` that holds a HashMap ringmaster like other two.
 	Null,
 }
 impl AsbNetMode {
@@ -116,12 +116,7 @@ impl AsbNetMode {
 		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
 
 		Ok(AsbNetMode::Amqp(
-			Arc::new(amqp::AmqpAsb {
-				rt_handle,
-				conn,
-				chan,
-				exchange,
-			}),
+			Arc::new(amqp::AmqpAsb::new(rt_handle, conn, chan, exchange)),
 			notifier,
 		))
 	}
@@ -203,6 +198,8 @@ impl Drop for AsbNetMode {
 	fn drop(&mut self) {
 		match self {
 			AsbNetMode::Amqp(asb, n) => {
+				asb.shutdown();
+
 				asb.rt_handle.block_on(async {
 					// Close channel and connection.
 					_ = asb.chan.clone().close().await;
@@ -213,6 +210,8 @@ impl Drop for AsbNetMode {
 				n.notify_waiters();
 			}
 			AsbNetMode::Mqtt(asb, n) => {
+				asb.shutdown();
+
 				asb.rt_handle.block_on(async {
 					_ = asb.client.disconnect().await;
 				});
@@ -356,68 +355,94 @@ impl AsbConnection {
 		// Do the network-specific setup for a reader.
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
-				// If no exchange specified use topic name, otherwise let the broker name
-				// it.
-				let queue_name = match asb.exchange.is_some() {
-					true => "",
-					false => bus_topic,
+				let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(bus_topic)
+				{
+					// There is a reader somewhere.
+					// SAFETY: [get_topic_ctr] at start of fn ensures TypeId of `T` matches
+					//         any readers on this topic, therefore [`ReaderRingMaster<T>`]
+					//         is exactly the same as stored in `asb`.
+					Some(r) => r.into_arc_any().downcast().unwrap(),
+					// First of its kind for this topic.
+					None => {
+						// If no exchange specified use topic name, otherwise let the broker name
+						// it.
+						let queue_name = match asb.exchange.is_some() {
+							true => "",
+							false => bus_topic,
+						};
+
+						// Prepare declare queue args.
+						// If `auto_delete` desired, then `exclusive` must be true to avoid error
+						// with RabbitMQ due to deprecated combination.
+						let declare_args = QueueDeclareArguments::new(queue_name)
+							.exclusive(true)
+							.auto_delete(true)
+							.finish();
+
+						// Determine ACK based on QoS. True means server assumes delivery.
+						let auto_ack = match qos.reliability {
+							ReliabilityQos::BestEffort => true,
+							ReliabilityQos::Reliable => false,
+						};
+
+						// Create consumer.
+						let consumer = AmqpConsumer {
+							qos,
+							topic: bus_topic.to_string(),
+							asb: asb.clone(),
+						};
+
+						// Do all the actual network stuff here and save tag for deleting consumer.
+						let tag = asb.rt_handle.block_on(async {
+							// Declare queue
+							// Safety: We do not set `no_wait` above.
+							let res = asb.chan.queue_declare(declare_args).await?.unwrap();
+
+							// Prepare the consumer arguments for the new queue. Use returned result
+							// to guarantee queue name is correct.
+							let consume_args = BasicConsumeArguments::new(&res.0, "")
+								.auto_ack(auto_ack)
+								.finish();
+
+							// If an exchange is specified, bind queue to it.
+							if let Some(ref ex) = asb.exchange {
+								let args = QueueBindArguments::new(&res.0, ex, bus_topic);
+								asb.chan.queue_bind(args).await?;
+							}
+
+							// Create consumer for topic (subscribe).
+							let tag = asb.chan.basic_consume(consumer, consume_args).await?;
+
+							Ok::<_, amqprs::error::Error>(tag)
+						})?;
+
+						let rng_mstr = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+
+						// Add ringmaster to bg thread
+						asb.readers.write().unwrap().insert(
+							bus_topic.to_string(),
+							(rng_mstr.clone(), AtomicU16::new(0), tag),
+						);
+
+						rng_mstr
+					}
 				};
 
-				// Prepare declare queue args.
-				// If `auto_delete` desired, then `exclusive` must be true to avoid error
-				// with RabbitMQ due to deprecated combination.
-				let declare_args = QueueDeclareArguments::new(queue_name)
-					.exclusive(true)
-					.auto_delete(true)
-					.finish();
-
-				// Determine ACK based on QoS. True means server assumes delivery.
-				let auto_ack = match qos.reliability {
-					ReliabilityQos::BestEffort => true,
-					ReliabilityQos::Reliable => false,
-				};
+				// Increment the ASB reader counter.
+				// SAFETY: Above match statement ensures there is an entry for `bus_topic`.
+				asb.add_reader(bus_topic).unwrap();
 
 				// Create the ring buffer for the reader and consumer.
 				// Buffer size is max(qos, 1) since size of 0 is invalid.
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
-				let all_senders = Arc::new(Mutex::new(vec![(0, prod)]));
-				let consumer = AmqpConsumer {
-					format: *wire_format,
-					buffers: all_senders.clone(),
-					qos,
-					last_received: None,
-				};
-
-				// Do all the actual network stuff here and save tag for deleting consumer.
-				let tag = asb.rt_handle.block_on(async {
-					// Declare queue
-					// Safety: We do not set `no_wait` above.
-					let res = asb.chan.queue_declare(declare_args).await?.unwrap();
-
-					// Prepare the consumer arguments for the new queue. Use returned result
-					// to guarantee queue name is correct.
-					let consume_args = BasicConsumeArguments::new(&res.0, "")
-						.auto_ack(auto_ack)
-						.finish();
-
-					// If an exchange is specified, bind queue to it.
-					if let Some(ref ex) = asb.exchange {
-						let args = QueueBindArguments::new(&res.0, ex, bus_topic);
-						asb.chan.queue_bind(args).await?;
-					}
-
-					// Create consumer for topic (subscribe).
-					let tag = asb.chan.basic_consume(consumer, consume_args).await?;
-
-					Ok::<_, amqprs::error::Error>(tag)
-				})?;
+				let my_sender_id = reader_ringmaster.add_sender(prod);
 
 				Ok(AsbReader {
 					buffer: cons,
 					expiration: qos.expiration,
-					all_senders,
-					my_sender_id: 0,
-					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), tag)),
+					ringmaster: reader_ringmaster,
+					my_sender_id,
+					net: Arc::new(AsbReaderNet::Amqp(asb.clone(), bus_topic.to_string())),
 					callbacks_active: Arc::new(AtomicBool::default()),
 					listeners: Default::default(),
 					counter,
@@ -457,6 +482,7 @@ impl AsbConnection {
 					}
 				};
 
+				// Increment the ASB reader counter.
 				// SAFETY: Above match statement ensures there is an entry for `bus_topic`.
 				asb.add_reader(bus_topic).unwrap();
 
@@ -466,26 +492,24 @@ impl AsbConnection {
 				Ok(AsbReader {
 					buffer: cons,
 					expiration: qos.expiration,
-					all_senders: Default::default(),
+					ringmaster: reader_ringmaster,
 					my_sender_id,
-					net: Arc::new(AsbReaderNet::Mqtt(
-						asb.clone(),
-						reader_ringmaster,
-						bus_topic.to_string(),
-					)),
+					net: Arc::new(AsbReaderNet::Mqtt(asb.clone(), bus_topic.to_string())),
 					callbacks_active: Default::default(),
 					listeners: Default::default(),
 					counter,
 				})
 			}
 			AsbNetMode::Null => {
+				let ringmaster = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+
 				// Construct empty ring buffer since null does nothing.
 				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
 
 				Ok(AsbReader {
 					buffer: cons,
 					expiration: qos.expiration,
-					all_senders: Default::default(),
+					ringmaster,
 					my_sender_id: 0,
 					net: Arc::new(AsbReaderNet::Null),
 					callbacks_active: Arc::new(AtomicBool::default()),
@@ -646,10 +670,10 @@ pub struct AsbReader<T> {
 	/// Shared with consumer for this topic. `u32` is random to identify sender
 	/// for this [AsbReader].
 	// TODO: Refactor this with [`Arc<ReaderRingMaster<T>>`].
-	all_senders: Arc<Mutex<Vec<ReaderSender<T>>>>,
+	ringmaster: Arc<ReaderRingMaster<T>>,
 	my_sender_id: u32,
 	/// Arc so that any unsubscribes happen only after last reader drops.
-	net: Arc<AsbReaderNet<T>>,
+	net: Arc<AsbReaderNet>,
 	/// Whether this reader has registered listeners and should disallow `read()`.
 	callbacks_active: Arc<AtomicBool>,
 	/// All registered listeners keyed by a random number.
@@ -906,18 +930,12 @@ impl<T> Clone for AsbReader<T> {
 	fn clone(&self) -> Self {
 		// Create the ring buffer
 		let (prod, cons) = crossbeam_ring_channel::ring_bounded(self.buffer.capacity());
-		let my_sender_id = rand::random();
-
-		// Add producer to shared vec
-		{
-			let mut buffers = self.all_senders.lock().unwrap();
-			buffers.push((my_sender_id, prod));
-		}
+		let my_sender_id = self.ringmaster.add_sender(prod);
 
 		AsbReader {
 			buffer: cons,
 			expiration: self.expiration,
-			all_senders: self.all_senders.clone(),
+			ringmaster: self.ringmaster.clone(),
 			my_sender_id,
 			net: self.net.clone(),
 			callbacks_active: Arc::new(AtomicBool::default()),
@@ -928,45 +946,28 @@ impl<T> Clone for AsbReader<T> {
 }
 impl<T> Drop for AsbReader<T> {
 	fn drop(&mut self) {
-		// Simply remove sender for this reader
-		{
-			let mut buffers = self.all_senders.lock().unwrap();
-			// This conditional should never fail, but do proper checking just in case.
-			if let Some(idx) = buffers.iter().position(|b| b.0 == self.my_sender_id) {
-				buffers.swap_remove(idx);
-			}
-		}
-
-		// TODO: Ideally the above of all_senders gets replaced with this, or both of
-		//       these get moved into [AsbReaderNet]. Try to avoid transport-specific
-		//       drop logic in here.
-		if let AsbReaderNet::Mqtt(_, mstr, _) = self.net.as_ref() {
-			mstr.remove_sender(self.my_sender_id);
-		}
+		self.ringmaster.remove_sender(self.my_sender_id);
 	}
 }
 
 /// Holds all network-specific data to manage the reader/subscriber.
-enum AsbReaderNet<T> {
-	// .1 is consumer tag
+enum AsbReaderNet {
 	Amqp(Arc<amqp::AmqpAsb>, String),
 	// .2 is topic
-	Mqtt(Arc<mqtt::MqttAsb>, Arc<ReaderRingMaster<T>>, String),
+	Mqtt(Arc<mqtt::MqttAsb>, String),
 	Null,
 }
-impl<T> Drop for AsbReaderNet<T> {
+impl Drop for AsbReaderNet {
 	fn drop(&mut self) {
 		match self {
-			AsbReaderNet::Amqp(asb, tag) => {
-				let cancel = BasicCancelArguments::new(tag);
-				_ = asb.rt_handle.block_on(asb.chan.basic_cancel(cancel));
+			AsbReaderNet::Amqp(asb, topic) => {
+				let last = asb.del_reader(topic);
 			}
-			AsbReaderNet::Mqtt(asb, _, topic) => {
-				// TODO: See TODO in AsbReader::drop.
-
+			AsbReaderNet::Mqtt(asb, topic) => {
 				// Decrement reader count.
 				if let Ok(true) = asb.del_reader(&topic) {
 					// Unsubscribe
+					// TODO: Refactor to MqttAsb.
 					_ = asb
 						.rt_handle
 						.block_on(asb.client.unsubscribe(topic.as_str()));

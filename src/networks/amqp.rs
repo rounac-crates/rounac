@@ -1,25 +1,25 @@
 //! AMQPRS related utilities
 
-use super::ReaderSender;
 use crate::{
-	config::{
-		NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat, params::ParamTool,
-	},
+	config::{NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, params::ParamTool},
 	error::CalError,
-	networks::utils::{AsbConnStatus, StatusCallbackManager},
+	networks::utils::{AsbConnStatus, RingMaster, StatusCallbackManager},
 };
 use amqprs::{
 	Ack, BasicProperties, Cancel, Close, CloseChannel, Deliver, Nack, Return,
 	callbacks::{ChannelCallback, ConnectionCallback},
-	channel::{BasicAckArguments, Channel},
+	channel::{BasicAckArguments, BasicCancelArguments, Channel},
 	connection::{Connection, OpenConnectionArguments},
 	consumer::AsyncConsumer,
 	error::Error,
 };
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::{
-	sync::{Arc, Mutex},
+	collections::HashMap,
+	sync::{
+		Arc, RwLock,
+		atomic::{AtomicBool, AtomicU16, Ordering},
+	},
 	time::Instant,
 };
 use tokio::runtime::Handle;
@@ -47,18 +47,111 @@ pub(crate) struct AmqpAsb {
 	pub conn: Connection,
 	pub chan: Channel,
 	pub exchange: Option<String>,
+	// For message handling. `.2` is topic.
+	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16, String)>>,
+	shutdown_fuse: AtomicBool,
+}
+impl AmqpAsb {
+	pub fn new(
+		rt_handle: Handle,
+		conn: Connection,
+		chan: Channel,
+		exchange: Option<String>,
+	) -> Self {
+		AmqpAsb {
+			rt_handle,
+			conn,
+			chan,
+			exchange,
+			readers: RwLock::new(HashMap::new()),
+			shutdown_fuse: AtomicBool::default(),
+		}
+	}
+
+	pub fn get_clone_for(&self, topic: &str) -> Option<Arc<dyn RingMaster>> {
+		self.readers.read().unwrap().get(topic).map(|v| v.0.clone())
+	}
+
+	/// Increment internal reader count, returning [Ok] if successful.
+	pub fn add_reader(&self, topic: &str) -> Result<(), ()> {
+		if let Some(t) = self.readers.read().unwrap().get(topic) {
+			t.1.fetch_add(1, Ordering::Acquire);
+			Ok(())
+		} else {
+			Err(())
+		}
+	}
+
+	/// Decrement internal reader count, where return of `Ok(true)` indicates this
+	/// was the last reader.
+	pub fn del_reader(&self, topic: &str) -> Result<bool, ()> {
+		// Get write lock to avoid a lock-unlock-lock situation when this is the last
+		// reader. Reader deletion is not expected to occur frequently.
+		let last_reader = {
+			let mut readers = self.readers.write().unwrap();
+			// If this is the last reader for the topic, remove entry
+			let Some(t) = readers.get(topic) else {
+				return Err(());
+			};
+
+			if t.1.fetch_sub(1, Ordering::Acquire) == 1 {
+				// Shutdown the ringmaster just in case.
+				t.0.shutdown();
+
+				// SAFETY: `.get` already succeeded above.
+				Some(readers.remove(topic).unwrap())
+			} else {
+				None
+			}
+		};
+
+		if let Some(last) = last_reader {
+			// Remove consumer
+			let args = BasicCancelArguments {
+				consumer_tag: last.2,
+				no_wait: true,
+			};
+			_ = self.rt_handle.block_on(self.chan.basic_cancel(args));
+
+			Ok(true)
+		} else {
+			Ok(false)
+		}
+	}
+
+	/// Passes `data` along to readers of the given `topic`.
+	pub fn handle_msg(&self, topic: &str, data: &[u8]) {
+		// If shutdown, don't even lock readers
+		if self.shutdown_fuse.load(Ordering::Acquire) {
+			return;
+		}
+
+		let readers = self.readers.read().unwrap();
+		if let Some(ring_master) = readers.get(topic) {
+			ring_master.0.distribute_msg(Instant::now(), data);
+		}
+	}
+
+	pub fn shutdown(&self) {
+		let mut readers = self.readers.write().unwrap();
+		for reader in readers.values() {
+			// Shutdown readers
+			reader.0.shutdown();
+		}
+
+		readers.clear();
+		self.shutdown_fuse.store(true, Ordering::Release);
+	}
 }
 
-pub struct AmqpConsumer<T> {
-	pub format: WireFormat,
-	/// Shared with each reader, but readers only modify during clone and drop.
-	pub buffers: Arc<Mutex<Vec<ReaderSender<T>>>>,
+pub struct AmqpConsumer {
 	pub qos: QosSettings,
-	pub last_received: Option<Instant>,
+	pub asb: Arc<AmqpAsb>,
+	pub topic: String,
 }
 
 #[async_trait]
-impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<T> {
+impl AsyncConsumer for AmqpConsumer {
 	async fn consume(
 		&mut self,
 		chan: &Channel,
@@ -79,28 +172,8 @@ impl<T: for<'de> Deserialize<'de> + Send + Sync> AsyncConsumer for AmqpConsumer<
 			}
 		}
 
-		// If `self.qos.time_based_filter` if set, check last receive time to avoid
-		// deserializing if we aren't due for another message.
-		if let Some(dur) = self.qos.time_based_filter {
-			// Checking time since last receive else setting last receive to now.
-			if let Some(last) = self.last_received
-				&& last.elapsed() < dur
-			{
-				return;
-			}
-
-			self.last_received = Some(Instant::now());
-		}
-
-		// Deserialize message before sending to all readers.
-		if let Ok(msg) = crate::msg_serde::deserialize_msg(&self.format, &data) {
-			// Send to all ring buffers
-			let arced: Arc<T> = Arc::new(msg);
-			let now = Instant::now();
-			for buffer in self.buffers.lock().unwrap().iter() {
-				_ = buffer.1.send((now, arced.clone()));
-			}
-		}
+		// Pass along message for distribution.
+		self.asb.handle_msg(&self.topic, &data);
 	}
 }
 
