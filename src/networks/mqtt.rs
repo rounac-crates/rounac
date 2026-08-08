@@ -26,8 +26,8 @@ pub(crate) fn get_mqtt_opts(network: &NetworkConfig) -> Result<MqttOptions, CalE
 	let params = ParamTool(&network.params);
 
 	// Get parameters
-	let host = params.get_str_req("host")?;
-	let port = params.get_int_req("port")?;
+	let host = params.get_str("host")?.unwrap_or("localhost");
+	let port = params.get_int("port")?.unwrap_or(1883);
 	let client_id = params.get_str("client_id")?.unwrap_or_default();
 	let user = params.get_str("username")?;
 	let pass = params.get_str("password")?;

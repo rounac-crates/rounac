@@ -34,8 +34,8 @@ pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArgume
 	let params = ParamTool(&network.params);
 
 	// Get parameters
-	let host = params.get_str_req("host")?;
-	let port = params.get_int_req("port")?;
+	let host = params.get_str("host")?.unwrap_or("localhost");
+	let port = params.get_int("port")?.unwrap_or(5672);
 	let user = params.get_str_req("username")?;
 	let pass = params.get_str_req("password")?;
 
