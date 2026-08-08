@@ -175,10 +175,15 @@ pub(super) trait RingMaster: Send + Sync {
 	fn into_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync>;
 }
 
+/// Ringmaster for readers.
+///
+/// Maintains a list of [`ReaderSender<T>`] that it will distribute messages to
+/// whenever [`distribute_msg`] is called, adhering to any time-based filtering
+/// set in [`QosSettings`].
 pub(super) struct ReaderRingMaster<T> {
-	pub senders: RwLock<Vec<ReaderSender<T>>>,
-	pub wire_format: WireFormat,
-	pub qos: QosSettings,
+	senders: RwLock<Vec<ReaderSender<T>>>,
+	wire_format: WireFormat,
+	qos: QosSettings,
 	// Should be fine as mutex, critical section is short so rwlock won't give any
 	// real advantage.
 	last_received: Mutex<Option<Instant>>,
@@ -229,6 +234,7 @@ impl<T: DeserializeOwned + Send + Sync + 'static> RingMaster for ReaderRingMaste
 
 			*last_received = Some(recv_time);
 		}
+
 		// Deserialize message first, doing nothing if there is an error.
 		let Ok(msg) = crate::msg_serde::deserialize_msg::<T>(&self.wire_format, data) else {
 			return;
