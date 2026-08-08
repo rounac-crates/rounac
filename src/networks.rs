@@ -437,9 +437,9 @@ impl AsbConnection {
 				})
 			}
 			AsbNetMode::Mqtt(asb, _) => {
-				let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(topic) {
-					// There is a reader somewhere (TODO: Make sure map empty when last
-					// reader dies).
+				let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(bus_topic)
+				{
+					// There is a reader somewhere.
 					// SAFETY: [get_topic_ctr] at start of fn ensures TypeId of `T` matches
 					//         any readers on this topic, therefore [`ReaderRingMaster<T>`]
 					//         is exactly the same as stored in `asb`.
@@ -455,7 +455,7 @@ impl AsbConnection {
 						// Subscribe to topic
 						_ = asb
 							.rt_handle
-							.block_on(asb.client.subscribe(topic, mqtt_qos));
+							.block_on(asb.client.subscribe(bus_topic, mqtt_qos));
 						// TODO: Figure out how to wait till SubAck is received.
 
 						let rng_mstr = Arc::new(ReaderRingMaster::new(*wire_format, qos));
@@ -464,11 +464,14 @@ impl AsbConnection {
 						asb.readers
 							.write()
 							.unwrap()
-							.insert(bus_topic.to_string(), (rng_mstr.clone(), AtomicU16::new(1)));
+							.insert(bus_topic.to_string(), (rng_mstr.clone(), AtomicU16::new(0)));
 
 						rng_mstr
 					}
 				};
+
+				// SAFETY: Above match statement ensures there is an entry for `bus_topic`.
+				asb.add_reader(bus_topic).unwrap();
 
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
 				let my_sender_id = reader_ringmaster.add_sender(prod);
@@ -530,7 +533,7 @@ impl AsbConnection {
 			)))?;
 
 		// Get the topic name for the bus.
-		let topic_name = service_cfg
+		let bus_topic = service_cfg
 			.and_then(|cfg| {
 				// Try to get the bus topic
 				cfg.topics
@@ -574,7 +577,7 @@ impl AsbConnection {
 
 				// Create the publish parameters
 				let props = BasicProperties::default();
-				let args = BasicPublishArguments::new(exchange_name, topic_name);
+				let args = BasicPublishArguments::new(exchange_name, bus_topic);
 
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),
@@ -590,7 +593,7 @@ impl AsbConnection {
 				};
 
 				Ok(AsbWriter {
-					net: AsbWriterNet::Mqtt(asb.clone(), mqtt_qos, topic.to_string()),
+					net: AsbWriterNet::Mqtt(asb.clone(), mqtt_qos, bus_topic.to_string()),
 					format: *wire_format,
 					_counter: counter,
 					_asb: PhantomData,
