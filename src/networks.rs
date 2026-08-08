@@ -154,10 +154,8 @@ impl AsbNetMode {
 		opts.set_manual_acks(false); // Let library handle these for us always.
 
 		// Create the client and event loop (nothing is sent yet).
-		// This is the internal buffer for any messages written by `client`. Shared
-		// connection-wide so unaffected by QoS settings.
-		const CLIENT_CAP: usize = 200;
-		let (client, mut evt_loop) = rumqttc::AsyncClient::new(opts, CLIENT_CAP);
+		// Docs recommend [AsyncClient] capacity of 0.
+		let (client, mut evt_loop) = rumqttc::AsyncClient::new(opts, 0);
 		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle, client));
 
 		// Make bg clones.
