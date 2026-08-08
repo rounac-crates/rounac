@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use std::{
 	sync::{
 		Arc, Mutex, RwLock,
-		atomic::{AtomicUsize, Ordering},
+		atomic::{AtomicBool, AtomicUsize, Ordering},
 	},
 	thread,
 	time::Instant,
@@ -165,8 +165,13 @@ impl Drop for PossessCtr {
 }
 
 pub(super) trait RingMaster: Send + Sync {
+	/// Distribute message to any internal ring buffers.
 	fn distribute_msg(&self, recv_time: Instant, data: &[u8]);
 
+	/// Permanently disable functionality.
+	fn shutdown(&self);
+
+	/// Used so a `dyn RingMaster` can be downcast to a concrete type.
 	fn into_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync>;
 }
 
@@ -177,6 +182,7 @@ pub(super) struct ReaderRingMaster<T> {
 	// Should be fine as mutex, critical section is short so rwlock won't give any
 	// real advantage.
 	last_received: Mutex<Option<Instant>>,
+	shutdown_fuse: AtomicBool,
 }
 impl<T> ReaderRingMaster<T> {
 	/// Creates an object with the specified format and no senders.
@@ -186,6 +192,7 @@ impl<T> ReaderRingMaster<T> {
 			wire_format,
 			qos,
 			last_received: Mutex::new(None),
+			shutdown_fuse: AtomicBool::default(),
 		}
 	}
 
@@ -233,6 +240,13 @@ impl<T: DeserializeOwned + Send + Sync + 'static> RingMaster for ReaderRingMaste
 		for sender in senders.iter() {
 			_ = sender.1.send((recv_time, msg.clone()));
 		}
+	}
+
+	/// Permanently disable functionality.
+	fn shutdown(&self) {
+		let mut senders = self.senders.write().unwrap();
+		senders.clear();
+		self.shutdown_fuse.store(true, Ordering::Release);
 	}
 
 	/// Used to permit downcasting back to concrete type (likely

@@ -8,7 +8,7 @@ use std::{
 	collections::HashMap,
 	sync::{
 		Arc, RwLock,
-		atomic::{AtomicU16, Ordering},
+		atomic::{AtomicBool, AtomicU16, Ordering},
 	},
 	time::Instant,
 };
@@ -19,6 +19,7 @@ pub(super) struct MqttAsb {
 	pub client: AsyncClient,
 	// Tuple of (ringmaster, reader_count)
 	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16)>>,
+	shutdown_fuse: AtomicBool,
 }
 impl MqttAsb {
 	pub fn new(rt_handle: Handle, client: AsyncClient) -> Self {
@@ -26,6 +27,7 @@ impl MqttAsb {
 			rt_handle,
 			client,
 			readers: RwLock::new(HashMap::new()),
+			shutdown_fuse: AtomicBool::default(),
 		}
 	}
 
@@ -35,6 +37,10 @@ impl MqttAsb {
 		S: Into<String>,
 		V: Into<Vec<u8>>,
 	{
+		if self.shutdown_fuse.load(Ordering::Acquire) {
+			return Err(CalError::net_err("ASB has been shut down."));
+		}
+
 		self.rt_handle
 			.block_on(self.client.publish(topic, qos, retain, data))
 			.map_err(CalError::net_err)
@@ -81,5 +87,16 @@ impl MqttAsb {
 		if let Some(ring_master) = readers.get(topic) {
 			ring_master.0.distribute_msg(Instant::now(), data);
 		}
+	}
+
+	pub fn shutdown(&self) {
+		let mut readers = self.readers.write().unwrap();
+		for reader in readers.values() {
+			// Shutdown readers
+			reader.0.shutdown();
+		}
+
+		readers.clear();
+		self.shutdown_fuse.store(true, Ordering::Release);
 	}
 }
