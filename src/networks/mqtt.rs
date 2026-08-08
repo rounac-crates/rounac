@@ -2,8 +2,11 @@
 //!
 
 use super::utils::RingMaster;
-use crate::CalError;
-use rumqttc::{AsyncClient, QoS};
+use crate::{
+	CalError,
+	config::{NetworkConfig, NetworkKind, params::ParamTool},
+};
+use rumqttc::{AsyncClient, MqttOptions, QoS};
 use std::{
 	collections::HashMap,
 	sync::{
@@ -13,6 +16,36 @@ use std::{
 	time::Instant,
 };
 use tokio::runtime::Handle;
+
+pub(crate) fn get_mqtt_opts(network: &NetworkConfig) -> Result<MqttOptions, CalError> {
+	// Verify this network is the correct type.
+	if network.kind != NetworkKind::Mqtt {
+		return Err(CalError::config_err("Expected network kind \"mqtt\"."));
+	}
+
+	let params = ParamTool(&network.params);
+
+	// Get parameters
+	let host = params.get_str_req("host")?;
+	let port = params.get_int_req("port")?;
+	let client_id = params.get_str("client_id")?.unwrap_or_default();
+	let user = params.get_str("username")?;
+	let pass = params.get_str("password")?;
+
+	// Both username and password must be present if either is.
+	if user.is_some() && pass.is_none() || pass.is_some() && user.is_none() {
+		return Err(CalError::config_err(
+			"Expected \"username\" and \"password\", or neither.",
+		));
+	}
+
+	let mut opts = MqttOptions::new(client_id, host, port as u16);
+	if user.is_some() && pass.is_some() {
+		opts.set_credentials(user.unwrap(), pass.unwrap());
+	}
+
+	Ok(opts)
+}
 
 pub(super) struct MqttAsb {
 	pub rt_handle: Handle,
