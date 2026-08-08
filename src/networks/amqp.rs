@@ -2,7 +2,9 @@
 
 use super::ReaderSender;
 use crate::{
-	config::{NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
+	config::{
+		NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat, params::ParamTool,
+	},
 	error::CalError,
 	networks::utils::{AsbConnStatus, StatusCallbackManager},
 };
@@ -21,7 +23,6 @@ use std::{
 	time::Instant,
 };
 use tokio::runtime::Handle;
-use toml::Value;
 
 /// Get the necessary config params to create AMQP connection for `net_name`.
 pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArguments, CalError> {
@@ -30,29 +31,15 @@ pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArgume
 		return Err(CalError::config_err("Expected network kind \"amqp\"."));
 	}
 
-	// Get parameters
-	let host = match network.params.get("host") {
-		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err("Expected string parameter \"host\".")),
-	}?;
-	let port = match network.params.get("port") {
-		Some(Value::Integer(i)) => Ok(i),
-		_ => Err(CalError::config_err("Expected integer parameter \"port\".")),
-	}?;
-	let user = match network.params.get("username") {
-		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err(
-			"Expected string parameter \"username\".",
-		)),
-	}?;
-	let pass = match network.params.get("password") {
-		Some(Value::String(s)) => Ok(s),
-		_ => Err(CalError::config_err(
-			"Expected string parameter \"password\".",
-		)),
-	}?;
+	let params = ParamTool(&network.params);
 
-	Ok(OpenConnectionArguments::new(host, *port as u16, user, pass))
+	// Get parameters
+	let host = params.get_str_req("host")?;
+	let port = params.get_int_req("port")?;
+	let user = params.get_str_req("username")?;
+	let pass = params.get_str_req("password")?;
+
+	Ok(OpenConnectionArguments::new(host, port as u16, user, pass))
 }
 
 pub(crate) struct AmqpAsb {
