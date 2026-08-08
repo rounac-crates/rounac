@@ -138,20 +138,8 @@ impl AsbNetMode {
 			.build()?;
 		let rt_handle = rt.handle().clone();
 
-		// Get the URL parameter for the broker.
-		let url = match config.params.get("url") {
-			Some(toml::Value::String(u)) if !u.is_empty() => u,
-			_ => {
-				return Err(CalError::config_err(format_args!(
-					"MQTT parameter \"url\" must be a non-empty string."
-				)));
-			}
-		};
-
-		// Try to parse the URL into MQTT options.
-		// TODO: Don't use URL since it's not a standardized URL scheme.
-		let mut opts = MqttOptions::parse_url(url)?;
-		opts.set_manual_acks(false); // Let library handle these for us always.
+		// Get the MQTT options from config.
+		let opts = mqtt::get_mqtt_opts(config)?;
 
 		// Create the client and event loop (nothing is sent yet).
 		// Docs recommend [AsyncClient] capacity of 0.
