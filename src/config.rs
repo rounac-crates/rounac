@@ -74,6 +74,8 @@
 //! time_based_filter = "1 s" # See expiration comment for format.
 //! ```
 
+pub(crate) mod params;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr, time::Duration};
 use toml::Table;
