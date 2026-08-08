@@ -45,17 +45,28 @@
 //! # Required network kind, which defines remaining parameters.
 //! kind = "amqp"
 //! ## AMQP-specific parameters
-//! # Required hostname of broker.
+//! # Optional hostname of broker. Defaults to "localhost".
 //! host = "localhost"
-//! # Required port of broker
+//! # Optional port of broker. Defaults to 5672.
 //! port = 5672
-//! # Required credentials to access broker.
+//! # Optional credentials to access broker. Defaults to "guest" for both.
 //! username = "guest"
 //! password = "guest"
 //! # Optional non-empty exchange name to segregate traffic on this ASB.
 //! exchange = "rounac"
 //! # Optional boolean to specify exchange durability. Defaults to true.
 //! durable_exchange = true
+//!
+//! [networks.artemis]
+//! kind = "mqtt"
+//! ## MQTT-specific parameters
+//! # Optional hostname of broker. Defaults to "localhost".
+//! host = "localhost"
+//! # Optional port of broker. Defaults to 1883.
+//! port = 1883
+//! # Optional credentials to access broker.
+//! username = "guest"
+//! password = "guest"
 //!
 //! # A null network always succeeds but does nothing.
 //! [networks.blackhole]

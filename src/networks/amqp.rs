@@ -36,8 +36,8 @@ pub fn open_args_for_net(network: &NetworkConfig) -> Result<OpenConnectionArgume
 	// Get parameters
 	let host = params.get_str("host")?.unwrap_or("localhost");
 	let port = params.get_int("port")?.unwrap_or(5672);
-	let user = params.get_str_req("username")?;
-	let pass = params.get_str_req("password")?;
+	let user = params.get_str("username")?.unwrap_or("guest");
+	let pass = params.get_str("password")?.unwrap_or("guest");
 
 	Ok(OpenConnectionArguments::new(host, port as u16, user, pass))
 }
