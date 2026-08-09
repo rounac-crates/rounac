@@ -47,7 +47,7 @@ pub(crate) struct AmqpAsb {
 	pub conn: Connection,
 	pub chan: Channel,
 	pub exchange: Option<String>,
-	// For message handling. `.2` is topic.
+	// For message handling. `.2` is consumer tag.
 	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16, String)>>,
 	shutdown_fuse: AtomicBool,
 }
