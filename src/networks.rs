@@ -525,7 +525,7 @@ impl AsbConnection {
 					expiration: qos.expiration,
 					ringmaster,
 					my_sender_id,
-					net: Arc::new(AsbReaderNet::Loopback(asb.clone())),
+					net: Arc::new(AsbReaderNet::Loopback(asb.clone(), bus_topic.to_string())),
 					callbacks_active: Default::default(),
 					listeners: Default::default(),
 					counter,
@@ -992,7 +992,7 @@ enum AsbReaderNet {
 	Amqp(Arc<amqp::AmqpAsb>, String),
 	// .2 is topic
 	Mqtt(Arc<mqtt::MqttAsb>, String),
-	Loopback(Arc<loopback::LoopbackAsb>),
+	Loopback(Arc<loopback::LoopbackAsb>, String),
 	Null,
 }
 impl Drop for AsbReaderNet {
@@ -1000,6 +1000,7 @@ impl Drop for AsbReaderNet {
 		match self {
 			AsbReaderNet::Amqp(asb, topic) => _ = asb.del_reader(topic),
 			AsbReaderNet::Mqtt(asb, topic) => _ = asb.del_reader(&topic),
+			AsbReaderNet::Loopback(asb, topic) => _ = asb.del_reader(&topic),
 			_ => {}
 		}
 	}
