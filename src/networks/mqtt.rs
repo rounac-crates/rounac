@@ -50,8 +50,8 @@ pub(crate) fn get_mqtt_opts(network: &NetworkConfig) -> Result<MqttOptions, CalE
 pub(super) struct MqttAsb {
 	pub rt_handle: Handle,
 	pub client: AsyncClient,
-	// Tuple of (ringmaster, reader_count)
-	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16)>>,
+	// Tuple of (ringmaster, reader_count, bus_topic)
+	pub readers: RwLock<HashMap<String, (Arc<dyn RingMaster>, AtomicU16, String)>>,
 	shutdown_fuse: AtomicBool,
 }
 impl MqttAsb {
@@ -98,19 +98,30 @@ impl MqttAsb {
 	pub fn del_reader(&self, topic: &str) -> Result<bool, ()> {
 		// Get write lock to avoid a lock-unlock-lock situation when this is the last
 		// reader. Reader deletion is not expected to occur frequently.
-		let mut readers = self.readers.write().unwrap();
-		if let Some(t) = readers.get(topic) {
-			let v = t.1.fetch_sub(1, Ordering::Acquire);
-			// If this was the last reader for the topic, remove entry
-			if v == 0 {
-				readers.remove(topic);
+		let last_reader = {
+			let mut readers = self.readers.write().unwrap();
+			// If this is the last reader for the topic, remove entry
+			let Some(t) = readers.get(topic) else {
+				return Err(());
+			};
 
-				Ok(true)
+			if t.1.fetch_sub(1, Ordering::Acquire) == 1 {
+				// Shutdown the ringmaster just in case.
+				t.0.shutdown();
+
+				// SAFETY: `.get` already succeeded above.
+				Some(readers.remove(topic).unwrap())
 			} else {
-				Ok(false)
+				None
 			}
+		};
+
+		if let Some(last) = last_reader {
+			_ = self.rt_handle.block_on(self.client.unsubscribe(&last.2));
+
+			Ok(true)
 		} else {
-			Err(())
+			Ok(false)
 		}
 	}
 

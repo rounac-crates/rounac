@@ -473,10 +473,10 @@ impl AsbConnection {
 						let rng_mstr = Arc::new(ReaderRingMaster::new(*wire_format, qos));
 
 						// Add ringmaster to bg thread
-						asb.readers
-							.write()
-							.unwrap()
-							.insert(bus_topic.to_string(), (rng_mstr.clone(), AtomicU16::new(0)));
+						asb.readers.write().unwrap().insert(
+							bus_topic.to_string(),
+							(rng_mstr.clone(), AtomicU16::new(0), bus_topic.to_string()),
+						);
 
 						rng_mstr
 					}
@@ -960,19 +960,8 @@ enum AsbReaderNet {
 impl Drop for AsbReaderNet {
 	fn drop(&mut self) {
 		match self {
-			AsbReaderNet::Amqp(asb, topic) => {
-				_ = asb.del_reader(topic);
-			}
-			AsbReaderNet::Mqtt(asb, topic) => {
-				// Decrement reader count.
-				if let Ok(true) = asb.del_reader(&topic) {
-					// Unsubscribe
-					// TODO: Refactor to MqttAsb.
-					_ = asb
-						.rt_handle
-						.block_on(asb.client.unsubscribe(topic.as_str()));
-				}
-			}
+			AsbReaderNet::Amqp(asb, topic) => _ = asb.del_reader(topic),
+			AsbReaderNet::Mqtt(asb, topic) => _ = asb.del_reader(&topic),
 			AsbReaderNet::Null => {}
 		}
 	}
