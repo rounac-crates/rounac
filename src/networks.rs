@@ -1,6 +1,7 @@
 //! Module for the network related types.
 
 mod amqp;
+mod loopback;
 mod mqtt;
 pub(crate) mod utils;
 
@@ -44,7 +45,7 @@ use tokio::sync::Notify;
 enum AsbNetMode {
 	Amqp(Arc<amqp::AmqpAsb>, Arc<Notify>),
 	Mqtt(Arc<mqtt::MqttAsb>, Arc<Notify>),
-	// TODO: Refactor to new `NullAsb` that holds a HashMap ringmaster like other two.
+	Loopback(Arc<loopback::LoopbackAsb>),
 	Null,
 }
 impl AsbNetMode {
@@ -193,6 +194,13 @@ impl AsbNetMode {
 
 		Ok(AsbNetMode::Mqtt(mqtt_asb, notifier))
 	}
+
+	pub fn new_loopback(
+		config: &NetworkConfig,
+		status_manager: &Arc<StatusCallbackManager>,
+	) -> Result<Self, CalError> {
+		Ok(AsbNetMode::Loopback(Arc::new(loopback::LoopbackAsb::new())))
+	}
 }
 impl Drop for AsbNetMode {
 	fn drop(&mut self) {
@@ -218,6 +226,7 @@ impl Drop for AsbNetMode {
 
 				n.notify_waiters();
 			}
+			AsbNetMode::Loopback(asb) => asb.shutdown(),
 			_ => {}
 		};
 	}
@@ -254,6 +263,11 @@ impl AsbConnection {
 			}),
 			NetworkKind::Mqtt => Ok(AsbConnection {
 				net: AsbNetMode::new_mqtt(network, &status_manager)?,
+				topics: Default::default(),
+				status_manager,
+			}),
+			NetworkKind::Loopback => Ok(AsbConnection {
+				net: AsbNetMode::new_loopback(network, &status_manager)?,
 				topics: Default::default(),
 				status_manager,
 			}),
@@ -500,6 +514,23 @@ impl AsbConnection {
 					counter,
 				})
 			}
+			AsbNetMode::Loopback(asb) => {
+				let ringmaster = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
+				let my_sender_id = ringmaster.add_sender(prod);
+				asb.add_reader(bus_topic).unwrap();
+
+				Ok(AsbReader {
+					buffer: cons,
+					expiration: qos.expiration,
+					ringmaster,
+					my_sender_id,
+					net: Arc::new(AsbReaderNet::Loopback(asb.clone())),
+					callbacks_active: Default::default(),
+					listeners: Default::default(),
+					counter,
+				})
+			}
 			AsbNetMode::Null => {
 				let ringmaster = Arc::new(ReaderRingMaster::new(*wire_format, qos));
 
@@ -610,6 +641,12 @@ impl AsbConnection {
 					_asb: PhantomData,
 				})
 			}
+			AsbNetMode::Loopback(asb) => Ok(AsbWriter {
+				net: AsbWriterNet::Loopback(asb.clone(), bus_topic.to_string()),
+				format: WireFormat::Xml,
+				_counter: counter,
+				_asb: PhantomData,
+			}),
 			AsbNetMode::Null => Ok(AsbWriter {
 				net: AsbWriterNet::Null,
 				// No default for [WireFormat] so just picking Xml since it's the first.
@@ -955,6 +992,7 @@ enum AsbReaderNet {
 	Amqp(Arc<amqp::AmqpAsb>, String),
 	// .2 is topic
 	Mqtt(Arc<mqtt::MqttAsb>, String),
+	Loopback(Arc<loopback::LoopbackAsb>),
 	Null,
 }
 impl Drop for AsbReaderNet {
@@ -962,7 +1000,7 @@ impl Drop for AsbReaderNet {
 		match self {
 			AsbReaderNet::Amqp(asb, topic) => _ = asb.del_reader(topic),
 			AsbReaderNet::Mqtt(asb, topic) => _ = asb.del_reader(&topic),
-			AsbReaderNet::Null => {}
+			_ => {}
 		}
 	}
 }
@@ -981,6 +1019,7 @@ enum AsbWriterNet {
 	Amqp(Arc<amqp::AmqpAsb>, BasicProperties, BasicPublishArguments),
 	// .2 is topic.
 	Mqtt(Arc<mqtt::MqttAsb>, rumqttc::QoS, String),
+	Loopback(Arc<loopback::LoopbackAsb>, String),
 	Null,
 }
 impl<T: Serialize> AsbWriter<T> {
@@ -993,7 +1032,8 @@ impl<T: Serialize> AsbWriter<T> {
 				.rt_handle
 				.block_on(asb.chan.basic_publish(props.clone(), data, args.clone()))?),
 			AsbWriterNet::Mqtt(asb, qos, topic) => asb.publish(topic, *qos, false, data),
-			AsbWriterNet::Null => Ok(()),
+			AsbWriterNet::Loopback(asb, topic) => asb.publish(&topic, &data),
+			_ => Ok(()),
 		}
 	}
 }

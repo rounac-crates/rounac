@@ -68,6 +68,10 @@
 //! username = "guest"
 //! password = "guest"
 //!
+//! # A loopback network facilitates local message passing.
+//! [networks.loop]
+//! kind = "loopback"
+//!
 //! # A null network always succeeds but does nothing.
 //! [networks.blackhole]
 //! kind = "null"
@@ -152,6 +156,9 @@ pub enum NetworkKind {
 	/// MQTT 3.1.1
 	#[serde(rename = "mqtt", alias = "MQTT")]
 	Mqtt,
+	/// Local message passing network.
+	#[serde(rename = "loopback")]
+	Loopback,
 	/// The lack of any network. Useful for testing or quick config changes.
 	#[serde(rename = "null", alias = "NULL")]
 	Null,
