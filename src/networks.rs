@@ -961,7 +961,7 @@ impl Drop for AsbReaderNet {
 	fn drop(&mut self) {
 		match self {
 			AsbReaderNet::Amqp(asb, topic) => {
-				let last = asb.del_reader(topic);
+				_ = asb.del_reader(topic);
 			}
 			AsbReaderNet::Mqtt(asb, topic) => {
 				// Decrement reader count.
