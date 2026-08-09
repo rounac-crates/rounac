@@ -22,7 +22,7 @@ system_uuid = "00000000-0000-0000-0000-000000000000"
 
 [services.basic_status_publish]
 service_uuid = "00000000-0000-4000-8000-0123456789AB"
-network = "rabbit"
+network = "mosquitto"
 wire_format = "xml"
 
 [networks.rabbit]
@@ -32,6 +32,12 @@ port = 5672
 username = "guest"
 password = "guest"
 exchange = "rounac"
+
+[networks.mosquitto]
+kind = "mqtt"
+host = "localhost"
+username = "artemis"
+password = "artemis"
 "#;
 
 /// Returns empty security information for an unclassified USA producer.
@@ -140,7 +146,7 @@ fn main() {
 
 	// Loop and send a few status messages.
 	let start = Instant::now();
-	for _ in 0..5 {
+	for _ in 0..50 {
 		// Indicate to user we're sending status now, and warn if it failed to send.
 		println!("Sending status message..");
 		if let Err(e) = writer.write(&status) {

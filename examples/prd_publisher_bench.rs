@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 const CONFIG: &str = r#"
 [services.prd_benchmark_publisher]
-network = "artemis"
+network = "rabbit"
 wire_format = "xml"
 
 [networks.rabbit]
@@ -35,7 +35,9 @@ exchange = "rounac"
 
 [networks.artemis]
 kind = "mqtt"
-url = "mqtt://artemis:artemis@localhost:1883?client_id=prd_benchmark_publisher"
+host = "localhost"
+username = "artemis"
+password = "artemis"
 "#;
 
 /// Returns empty security information for an unclassified USA producer.

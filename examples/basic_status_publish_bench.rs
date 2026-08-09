@@ -32,6 +32,12 @@ port = 5672
 username = "guest"
 password = "guest"
 exchange = "rounac"
+
+[networks.artemis]
+kind = "mqtt"
+host = "localhost"
+username = "artemis"
+password = "artemis"
 "#;
 
 /// Returns empty security information for an unclassified USA producer.

@@ -13,7 +13,7 @@ system_uuid = "00000000-0000-0000-0000-000000000000"
 
 [services.basic_status_subscribe]
 service_uuid = "00000000-0000-4000-8000-0123456789AB"
-network = "rabbit"
+network = "mosquitto"
 wire_format = "xml"
 
 [networks.rabbit]
@@ -23,6 +23,12 @@ port = 5672
 username = "guest"
 password = "guest"
 exchange = "rounac"
+
+[networks.mosquitto]
+kind = "mqtt"
+host = "localhost"
+username = "artemis"
+password = "artemis"
 "#;
 
 fn main() {
@@ -38,7 +44,7 @@ fn main() {
 	let schema_ver = rounac_uci::v2_5::SCHEMA_VERSION.to_owned();
 
 	// Loop and send a few status messages.
-	let listen_time = Duration::from_secs(10);
+	let listen_time = Duration::from_secs(100);
 	let start = Instant::now();
 	let mut now;
 	let mut remaining = listen_time;

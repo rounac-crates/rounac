@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 const CONFIG: &str = r#"
 [services.prd_benchmark_subscriber]
-network = "artemis"
+network = "rabbit"
 wire_format = "xml"
 
 [networks.rabbit]
@@ -20,7 +20,9 @@ exchange = "rounac"
 
 [networks.artemis]
 kind = "mqtt"
-url = "mqtt://artemis:artemis@localhost:1883?client_id=prd_benchmark_subscriber"
+host = "localhost"
+username = "artemis"
+password = "artemis"
 "#;
 
 fn main() {
@@ -36,7 +38,7 @@ fn main() {
 	let schema_ver = rounac_uci::v2_5::SCHEMA_VERSION.to_owned();
 
 	// Loop and send a few status messages.
-	let listen_time = Duration::from_mins(3);
+	let listen_time = Duration::from_mins(15);
 	let start = Instant::now();
 	let mut now = Duration::ZERO;
 	let mut remaining = listen_time;
