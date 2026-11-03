@@ -418,26 +418,7 @@ impl AsbConnection {
 			AsbNetMode::Amqp(asb, _) => Self::create_amqp_reader(asb, counter, reader_config),
 			AsbNetMode::Mqtt(asb, _) => Self::create_mqtt_reader(asb, counter, reader_config),
 			AsbNetMode::Loopback(asb) => Self::create_loopback_reader(asb, counter, reader_config),
-			AsbNetMode::Null => {
-				let ringmaster = Arc::new(ReaderRingMaster::new(
-					reader_config.wire_format,
-					reader_config.qos,
-				));
-
-				// Construct empty ring buffer since null does nothing.
-				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
-
-				Ok(AsbReader {
-					buffer: cons,
-					expiration: reader_config.qos.expiration,
-					ringmaster,
-					my_sender_id: 0,
-					net: Arc::new(AsbReaderNet::Null),
-					callbacks_active: Arc::new(AtomicBool::default()),
-					listeners: Default::default(),
-					counter,
-				})
-			}
+			AsbNetMode::Null => Self::create_null_reader(counter, reader_config),
 		}
 	}
 
@@ -638,6 +619,27 @@ impl AsbConnection {
 				config.bus_topic.to_string(),
 			)),
 			callbacks_active: Default::default(),
+			listeners: Default::default(),
+			counter,
+		})
+	}
+
+	fn create_null_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		counter: PossessCtr,
+		config: ReaderConfig<'a>,
+	) -> Result<AsbReader<T>, CalError> {
+		let ringmaster = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
+
+		// Construct empty ring buffer since null does nothing.
+		let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
+
+		Ok(AsbReader {
+			buffer: cons,
+			expiration: config.qos.expiration,
+			ringmaster,
+			my_sender_id: 0,
+			net: Arc::new(AsbReaderNet::Null),
+			callbacks_active: Arc::new(AtomicBool::default()),
 			listeners: Default::default(),
 			counter,
 		})
