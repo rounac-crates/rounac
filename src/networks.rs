@@ -139,12 +139,22 @@ impl AsbNetMode {
 		config: &NetworkConfig,
 		status_manager: &Arc<StatusCallbackManager>,
 	) -> Result<Self, CalError> {
-		// Create current thread flavor runtime for now.
-		// TODO: Consider feature or config to choose runtime flavor.
-		let rt = tokio::runtime::Builder::new_current_thread()
-			.enable_all()
-			.build()?;
-		let rt_handle = rt.handle().clone();
+		let rt;
+		let rt_handle;
+
+		// Check whether there is an existing runtime and create one if not.
+		if let Ok(h) = tokio::runtime::Handle::try_current() {
+			rt = None;
+			rt_handle = h;
+		} else {
+			// Create current thread flavor runtime for now.
+			// TODO: Consider feature or config to choose runtime flavor.
+			let r = tokio::runtime::Builder::new_current_thread()
+				.enable_all()
+				.build()?;
+			rt_handle = r.handle().clone();
+			rt = Some(r);
+		}
 
 		// Get the MQTT options from config.
 		let opts = mqtt::get_mqtt_opts(config)?;
@@ -152,7 +162,7 @@ impl AsbNetMode {
 		// Create the client and event loop (nothing is sent yet).
 		// Docs recommend [AsyncClient] capacity of 0.
 		let (client, mut evt_loop) = rumqttc::AsyncClient::new(opts, 0);
-		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle, client));
+		let mqtt_asb = Arc::new(MqttAsb::new(rt_handle.clone(), client));
 
 		// Make bg clones.
 		let bg_mqtt_asb = mqtt_asb.clone();
@@ -161,7 +171,7 @@ impl AsbNetMode {
 
 		// Spawn the message handling task on the runtime. This ensures it gets a
 		// worker thread (in the case of multi-threaded).
-		_ = rt.spawn(async move {
+		_ = rt_handle.spawn(async move {
 			loop {
 				match evt_loop.poll().await {
 					Ok(rumqttc::Event::Incoming(evt)) => {
@@ -194,8 +204,10 @@ impl AsbNetMode {
 
 		// Spawn background thread to drive the tokio runtime.
 		let notifier = Arc::new(Notify::new());
-		let bg_notifier = notifier.clone();
-		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
+		if let Some(r) = rt {
+			let bg_notifier = notifier.clone();
+			std::thread::spawn(move || r.block_on(bg_notifier.notified()));
+		}
 
 		// If bad connection, stop bg thread and return error.
 		if let Some(err) = init_recv.recv().unwrap() {
@@ -214,6 +226,7 @@ impl AsbNetMode {
 		Ok(AsbNetMode::Loopback(Arc::new(loopback::LoopbackAsb::new())))
 	}
 }
+
 impl Drop for AsbNetMode {
 	fn drop(&mut self) {
 		match self {
