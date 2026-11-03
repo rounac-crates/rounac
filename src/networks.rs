@@ -573,6 +573,15 @@ impl AsbConnection {
 		counter: PossessCtr,
 		config: ReaderConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
+		asb.rt_handle
+			.block_on(Self::create_mqtt_reader_async(asb, counter, config))
+	}
+
+	async fn create_mqtt_reader_async<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		asb: &Arc<MqttAsb>,
+		counter: PossessCtr,
+		config: ReaderConfig<'a>,
+	) -> Result<AsbReader<T>, CalError> {
 		let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(config.bus_topic)
 		{
 			// There is a reader somewhere.
@@ -589,9 +598,7 @@ impl AsbConnection {
 				};
 
 				// Subscribe to topic
-				_ = asb
-					.rt_handle
-					.block_on(asb.client.subscribe(config.bus_topic, mqtt_qos));
+				_ = asb.client.subscribe(config.bus_topic, mqtt_qos).await;
 				// TODO: Figure out how to wait till SubAck is received.
 
 				let rng_mstr = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
