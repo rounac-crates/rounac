@@ -471,6 +471,15 @@ impl AsbConnection {
 		counter: PossessCtr,
 		config: ReaderConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
+		asb.rt_handle
+			.block_on(Self::create_amqp_reader_async(asb, counter, config))
+	}
+
+	async fn create_amqp_reader_async<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		asb: &Arc<AmqpAsb>,
+		counter: PossessCtr,
+		config: ReaderConfig<'a>,
+	) -> Result<AsbReader<T>, CalError> {
 		let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(config.bus_topic)
 		{
 			// There is a reader somewhere.
@@ -508,29 +517,24 @@ impl AsbConnection {
 					asb: asb.clone(),
 				};
 
-				// Do all the actual network stuff here and save tag for deleting consumer.
-				let tag = asb.rt_handle.block_on(async {
-					// Declare queue
-					// Safety: We do not set `no_wait` above.
-					let res = asb.chan.queue_declare(declare_args).await?.unwrap();
+				// Declare queue
+				// Safety: We do not set `no_wait` above.
+				let res = asb.chan.queue_declare(declare_args).await?.unwrap();
 
-					// Prepare the consumer arguments for the new queue. Use returned result
-					// to guarantee queue name is correct.
-					let consume_args = BasicConsumeArguments::new(&res.0, "")
-						.auto_ack(auto_ack)
-						.finish();
+				// Prepare the consumer arguments for the new queue. Use returned result
+				// to guarantee queue name is correct.
+				let consume_args = BasicConsumeArguments::new(&res.0, "")
+					.auto_ack(auto_ack)
+					.finish();
 
-					// If an exchange is specified, bind queue to it.
-					if let Some(ref ex) = asb.exchange {
-						let args = QueueBindArguments::new(&res.0, ex, config.bus_topic);
-						asb.chan.queue_bind(args).await?;
-					}
+				// If an exchange is specified, bind queue to it.
+				if let Some(ref ex) = asb.exchange {
+					let args = QueueBindArguments::new(&res.0, ex, config.bus_topic);
+					asb.chan.queue_bind(args).await?;
+				}
 
-					// Create consumer for topic (subscribe).
-					let tag = asb.chan.basic_consume(consumer, consume_args).await?;
-
-					Ok::<_, amqprs::error::Error>(tag)
-				})?;
+				// Create consumer for topic (subscribe).
+				let tag = asb.chan.basic_consume(consumer, consume_args).await?;
 
 				let rng_mstr = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
 
