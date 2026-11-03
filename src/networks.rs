@@ -422,6 +422,30 @@ impl AsbConnection {
 		}
 	}
 
+	pub async fn create_reader_async<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		&self,
+		topic: &str,
+		config: &AsbConfig,
+		svc_name: &str,
+	) -> Result<AsbReader<T>, CalError> {
+		// Check whether topic exists, and if so, ensure that `T` matches.
+		let counter = self.get_topic_ctr::<T>(topic)?;
+
+		let reader_config = Self::get_reader_config(config, svc_name, topic)?;
+
+		// Do the network-specific setup for a reader.
+		match &self.net {
+			AsbNetMode::Amqp(asb, _) => {
+				Self::create_amqp_reader_async(asb, counter, reader_config).await
+			}
+			AsbNetMode::Mqtt(asb, _) => {
+				Self::create_mqtt_reader_async(asb, counter, reader_config).await
+			}
+			AsbNetMode::Loopback(asb) => Self::create_loopback_reader(asb, counter, reader_config),
+			AsbNetMode::Null => Self::create_null_reader(counter, reader_config),
+		}
+	}
+
 	fn create_amqp_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<AmqpAsb>,
 		counter: PossessCtr,
