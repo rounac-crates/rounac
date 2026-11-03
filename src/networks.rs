@@ -259,7 +259,7 @@ impl Drop for AsbNetMode {
 }
 
 /// Represents the configuration items needed to create a reader.
-struct ReaderConfig<'a> {
+struct BusConfig<'a> {
 	wire_format: WireFormat,
 	qos: QosSettings,
 	bus_topic: &'a str,
@@ -341,11 +341,11 @@ impl AsbConnection {
 		}
 	}
 
-	fn get_reader_config<'a>(
+	fn get_bus_config<'a>(
 		config: &'a AsbConfig,
 		svc_name: &str,
 		topic: &'a str,
-	) -> Result<ReaderConfig<'a>, CalError> {
+	) -> Result<BusConfig<'a>, CalError> {
 		// Get the config for this service
 		let service_cfg = config.services.service.get(svc_name);
 
@@ -395,7 +395,7 @@ impl AsbConnection {
 			})
 			.unwrap_or(topic);
 
-		Ok(ReaderConfig {
+		Ok(BusConfig {
 			wire_format,
 			qos,
 			bus_topic,
@@ -411,7 +411,7 @@ impl AsbConnection {
 		// Check whether topic exists, and if so, ensure that `T` matches.
 		let counter = self.get_topic_ctr::<T>(topic)?;
 
-		let reader_config = Self::get_reader_config(config, svc_name, topic)?;
+		let reader_config = Self::get_bus_config(config, svc_name, topic)?;
 
 		// Do the network-specific setup for a reader.
 		match &self.net {
@@ -431,7 +431,7 @@ impl AsbConnection {
 		// Check whether topic exists, and if so, ensure that `T` matches.
 		let counter = self.get_topic_ctr::<T>(topic)?;
 
-		let reader_config = Self::get_reader_config(config, svc_name, topic)?;
+		let reader_config = Self::get_bus_config(config, svc_name, topic)?;
 
 		// Do the network-specific setup for a reader.
 		match &self.net {
@@ -449,7 +449,7 @@ impl AsbConnection {
 	fn create_amqp_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<AmqpAsb>,
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		asb.rt_handle
 			.block_on(Self::create_amqp_reader_async(asb, counter, config))
@@ -458,7 +458,7 @@ impl AsbConnection {
 	async fn create_amqp_reader_async<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<AmqpAsb>,
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(config.bus_topic)
 		{
@@ -555,7 +555,7 @@ impl AsbConnection {
 	fn create_mqtt_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<MqttAsb>,
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		asb.rt_handle
 			.block_on(Self::create_mqtt_reader_async(asb, counter, config))
@@ -564,7 +564,7 @@ impl AsbConnection {
 	async fn create_mqtt_reader_async<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<MqttAsb>,
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		let reader_ringmaster: Arc<ReaderRingMaster<T>> = match asb.get_clone_for(config.bus_topic)
 		{
@@ -626,7 +626,7 @@ impl AsbConnection {
 	fn create_loopback_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		asb: &Arc<LoopbackAsb>,
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		let ringmaster = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
 		let (prod, cons) = crossbeam_ring_channel::ring_bounded(config.qos.buffer.max(1));
@@ -650,7 +650,7 @@ impl AsbConnection {
 
 	fn create_null_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
 		counter: PossessCtr,
-		config: ReaderConfig<'a>,
+		config: BusConfig<'a>,
 	) -> Result<AsbReader<T>, CalError> {
 		let ringmaster = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
 
@@ -678,54 +678,11 @@ impl AsbConnection {
 		// Check whether topic exists, and if so, ensure that `T` matches.
 		let counter = self.get_topic_ctr::<T>(topic)?;
 
-		// Get the config for this service
-		let service_cfg = config.services.service.get(svc_name);
-
-		// Check for the wire format.
-		let wire_format = service_cfg
-			.and_then(|cfg| {
-				cfg.wire_format
-					.as_ref()
-					.or(config.services.default_wire_format.as_ref())
-			})
-			.ok_or(CalError::config_err(format_args!(
-				"No wire format specified for topic {topic} under service {svc_name}."
-			)))?;
-
-		// Get the topic name for the bus.
-		let bus_topic = service_cfg
-			.and_then(|cfg| {
-				// Try to get the bus topic
-				cfg.topics
-					.get(topic)
-					.and_then(|tcfg| tcfg.bus_topic.as_ref())
-					.map(|s| s.as_str())
-			})
-			.unwrap_or(topic);
-
-		// Get the QoS config for `topic`, or use the default.
-		let qos = service_cfg
-			.and_then(|cfg| {
-				// Try to get the a QoS name to lookup.
-				cfg.topics
-					.get(topic)
-					.and_then(|tcfg| tcfg.qos.as_ref())
-					// otherwise use the service-level qos
-					.or(cfg.qos.as_ref())
-					// otherwise use the default
-					.or(config.services.default_qos.as_ref())
-			})
-			// Map name to actual [QosSettings], error if it's not in the config.
-			// Use the default QoS otherwise.
-			.map_or(Ok(Default::default()), |name| {
-				config
-					.qos
-					.get(name)
-					.copied()
-					.ok_or(CalError::config_err(format_args!(
-						"Could not find QoS settings for {name}"
-					)))
-			})?;
+		let BusConfig {
+			wire_format,
+			qos,
+			bus_topic,
+		} = Self::get_bus_config(config, svc_name, topic)?;
 
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
@@ -741,7 +698,7 @@ impl AsbConnection {
 
 				Ok(AsbWriter {
 					net: AsbWriterNet::Amqp(asb.clone(), props, args),
-					format: *wire_format,
+					format: wire_format,
 					_counter: counter,
 					_asb: PhantomData,
 				})
@@ -754,7 +711,7 @@ impl AsbConnection {
 
 				Ok(AsbWriter {
 					net: AsbWriterNet::Mqtt(asb.clone(), mqtt_qos, bus_topic.to_string()),
-					format: *wire_format,
+					format: wire_format,
 					_counter: counter,
 					_asb: PhantomData,
 				})
