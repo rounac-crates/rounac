@@ -59,7 +59,25 @@ impl AsbNetMode {
 		let rt = tokio::runtime::Builder::new_current_thread()
 			.enable_all()
 			.build()?;
-		let rt_handle = rt.handle().clone();
+
+		let asb_net = rt.block_on(AsbNetMode::new_amqp_async(config, status_manager))?;
+
+		// Spawn background thread to drive the tokio runtime.
+		let bg_notifier = match asb_net {
+			AsbNetMode::Amqp(_, ref n) => n.clone(),
+			_ => unreachable!(),
+		};
+		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
+
+		Ok(asb_net)
+	}
+
+	/// Create new object with variant [Amqp].
+	async fn new_amqp_async(
+		config: &NetworkConfig,
+		status_manager: &Arc<StatusCallbackManager>,
+	) -> Result<Self, CalError> {
+		let rt_handle = tokio::runtime::Handle::current();
 
 		// Check configuration for exchange and durability parameter.
 		let exchange = match config.params.get("exchange") {
@@ -91,30 +109,24 @@ impl AsbNetMode {
 
 		// Open the connection and create a single channel for everything.
 		let open_args = open_args_for_net(config)?;
-		let (conn, chan) = rt.block_on(async {
-			let conn = Connection::open(&open_args).await?;
-			conn.register_callback(conn_cb).await?;
-			let chan = conn.open_channel(None).await?;
-			chan.register_callback(chan_cb).await?;
-			chan.flow(true).await?; // Kickstart traffic flowing
+		let conn = Connection::open(&open_args).await?;
+		conn.register_callback(conn_cb).await?;
+		let chan = conn.open_channel(None).await?;
+		chan.register_callback(chan_cb).await?;
+		chan.flow(true).await?; // Kickstart traffic flowing
 
-			// If config has exchange name, create direct exchange.
-			if let Some(ref ex) = exchange {
-				let declare_args =
-					ExchangeDeclareArguments::of_type(ex, amqprs::channel::ExchangeType::Direct)
-						.durable(durable)
-						.finish();
+		// If config has exchange name, create direct exchange.
+		if let Some(ref ex) = exchange {
+			let declare_args =
+				ExchangeDeclareArguments::of_type(ex, amqprs::channel::ExchangeType::Direct)
+					.durable(durable)
+					.finish();
 
-				chan.exchange_declare(declare_args).await?;
-			}
-
-			Ok::<_, amqprs::error::Error>((conn, chan))
-		})?;
+			chan.exchange_declare(declare_args).await?;
+		}
 
 		// Spawn background thread to drive the tokio runtime.
 		let notifier = Arc::new(Notify::new());
-		let bg_notifier = notifier.clone();
-		std::thread::spawn(move || rt.block_on(bg_notifier.notified()));
 
 		Ok(AsbNetMode::Amqp(
 			Arc::new(amqp::AmqpAsb::new(rt_handle, conn, chan, exchange)),
