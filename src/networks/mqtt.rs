@@ -79,6 +79,28 @@ impl MqttAsb {
 			.map_err(CalError::net_err)
 	}
 
+	/// Publish to the ASB using the given parameters.
+	pub async fn publish_async<S, V>(
+		&self,
+		topic: S,
+		qos: QoS,
+		retain: bool,
+		data: V,
+	) -> Result<(), CalError>
+	where
+		S: Into<String>,
+		V: Into<Vec<u8>>,
+	{
+		if self.shutdown_fuse.load(Ordering::Acquire) {
+			return Err(CalError::net_err("ASB has been shut down."));
+		}
+
+		self.client
+			.publish(topic, qos, retain, data)
+			.await
+			.map_err(CalError::net_err)
+	}
+
 	pub fn get_clone_for(&self, topic: &str) -> Option<Arc<dyn RingMaster>> {
 		self.readers.read().unwrap().get(topic).map(|v| v.0.clone())
 	}
