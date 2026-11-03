@@ -6,10 +6,7 @@ mod mqtt;
 pub(crate) mod utils;
 
 use crate::{
-	config::{
-		AsbConfig, NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, ServiceConfig,
-		WireFormat,
-	},
+	config::{AsbConfig, NetworkConfig, NetworkKind, QosSettings, ReliabilityQos, WireFormat},
 	error::CalError,
 	networks::{
 		amqp::{AmqpAsb, ChanCb, ConnCb},
@@ -223,8 +220,8 @@ impl AsbNetMode {
 	}
 
 	pub fn new_loopback(
-		config: &NetworkConfig,
-		status_manager: &Arc<StatusCallbackManager>,
+		_: &NetworkConfig,
+		_: &Arc<StatusCallbackManager>,
 	) -> Result<Self, CalError> {
 		Ok(AsbNetMode::Loopback(Arc::new(loopback::LoopbackAsb::new())))
 	}
