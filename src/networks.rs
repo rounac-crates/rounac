@@ -1112,4 +1112,21 @@ impl<T: Serialize> AsbWriter<T> {
 			_ => Ok(()),
 		}
 	}
+
+	/// Publishes `msg` to the topic specified in [create_writer()](AsbConnection::create_writer).
+	pub async fn write_async(&self, msg: &T) -> Result<(), CalError> {
+		let data = crate::msg_serde::serialize_msg(&self.format, msg)?;
+
+		match &self.net {
+			AsbWriterNet::Amqp(asb, props, args) => Ok(asb
+				.chan
+				.basic_publish(props.clone(), data, args.clone())
+				.await?),
+			AsbWriterNet::Mqtt(asb, qos, topic) => {
+				asb.publish_async(topic, *qos, false, data).await
+			}
+			AsbWriterNet::Loopback(asb, topic) => asb.publish(&topic, &data),
+			_ => Ok(()),
+		}
+	}
 }
