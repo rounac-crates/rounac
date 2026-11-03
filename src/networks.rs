@@ -30,6 +30,7 @@ use amqprs::{
 };
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use crossbeam_ring_channel::{RingReceiver, RingSender};
+use rumqttc::tokio_rustls::rustls::Reader;
 use serde::{Deserialize, Serialize};
 use std::{
 	any,
@@ -260,6 +261,13 @@ impl Drop for AsbNetMode {
 	}
 }
 
+/// Represents the configuration items needed to create a reader.
+struct ReaderConfig<'a> {
+	wire_format: WireFormat,
+	qos: QosSettings,
+	bus_topic: &'a str,
+}
+
 /// Manages and maintains a single ASB connection.
 // TODO: Status var shared with background thread.
 pub struct AsbConnection {
@@ -336,20 +344,16 @@ impl AsbConnection {
 		}
 	}
 
-	pub fn create_reader<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
-		&self,
-		topic: &str,
-		config: &AsbConfig,
+	fn get_reader_config<'a>(
+		config: &'a AsbConfig,
 		svc_name: &str,
-	) -> Result<AsbReader<T>, CalError> {
-		// Check whether topic exists, and if so, ensure that `T` matches.
-		let counter = self.get_topic_ctr::<T>(topic)?;
-
+		topic: &'a str,
+	) -> Result<ReaderConfig<'a>, CalError> {
 		// Get the config for this service
 		let service_cfg = config.services.service.get(svc_name);
 
 		// Check for the wire format.
-		let wire_format = service_cfg
+		let wire_format = *service_cfg
 			.and_then(|cfg| {
 				cfg.wire_format
 					.as_ref()
@@ -394,16 +398,38 @@ impl AsbConnection {
 			})
 			.unwrap_or(topic);
 
+		Ok(ReaderConfig {
+			wire_format,
+			qos,
+			bus_topic,
+		})
+	}
+
+	pub fn create_reader<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		&self,
+		topic: &str,
+		config: &AsbConfig,
+		svc_name: &str,
+	) -> Result<AsbReader<T>, CalError> {
+		// Check whether topic exists, and if so, ensure that `T` matches.
+		let counter = self.get_topic_ctr::<T>(topic)?;
+
+		let ReaderConfig {
+			wire_format,
+			qos,
+			bus_topic,
+		} = Self::get_reader_config(config, svc_name, topic)?;
+
 		// Do the network-specific setup for a reader.
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => {
-				Self::create_amqp_reader(asb, counter, *wire_format, qos, bus_topic)
+				Self::create_amqp_reader(asb, counter, wire_format, qos, bus_topic)
 			}
 			AsbNetMode::Mqtt(asb, _) => {
-				Self::create_mqtt_reader(asb, counter, *wire_format, qos, bus_topic)
+				Self::create_mqtt_reader(asb, counter, wire_format, qos, bus_topic)
 			}
 			AsbNetMode::Loopback(asb) => {
-				let ringmaster = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+				let ringmaster = Arc::new(ReaderRingMaster::new(wire_format, qos));
 				let (prod, cons) = crossbeam_ring_channel::ring_bounded(qos.buffer.max(1));
 				let my_sender_id = ringmaster.add_sender(prod);
 				asb.add_reader(bus_topic).unwrap();
@@ -420,7 +446,7 @@ impl AsbConnection {
 				})
 			}
 			AsbNetMode::Null => {
-				let ringmaster = Arc::new(ReaderRingMaster::new(*wire_format, qos));
+				let ringmaster = Arc::new(ReaderRingMaster::new(wire_format, qos));
 
 				// Construct empty ring buffer since null does nothing.
 				let (_, cons) = crossbeam_ring_channel::ring_bounded(0);
