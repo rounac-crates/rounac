@@ -10,6 +10,7 @@ use crate::{
 	error::CalError,
 	networks::{
 		amqp::{AmqpAsb, ChanCb, ConnCb},
+		loopback::LoopbackAsb,
 		mqtt::MqttAsb,
 		utils::{
 			AsbConnStatus, AsbStatusListener, PossessCtr, ReaderRingMaster, StatusCallbackManager,
@@ -416,30 +417,7 @@ impl AsbConnection {
 		match &self.net {
 			AsbNetMode::Amqp(asb, _) => Self::create_amqp_reader(asb, counter, reader_config),
 			AsbNetMode::Mqtt(asb, _) => Self::create_mqtt_reader(asb, counter, reader_config),
-			AsbNetMode::Loopback(asb) => {
-				let ringmaster = Arc::new(ReaderRingMaster::new(
-					reader_config.wire_format,
-					reader_config.qos,
-				));
-				let (prod, cons) =
-					crossbeam_ring_channel::ring_bounded(reader_config.qos.buffer.max(1));
-				let my_sender_id = ringmaster.add_sender(prod);
-				asb.add_reader(reader_config.bus_topic).unwrap();
-
-				Ok(AsbReader {
-					buffer: cons,
-					expiration: reader_config.qos.expiration,
-					ringmaster,
-					my_sender_id,
-					net: Arc::new(AsbReaderNet::Loopback(
-						asb.clone(),
-						reader_config.bus_topic.to_string(),
-					)),
-					callbacks_active: Default::default(),
-					listeners: Default::default(),
-					counter,
-				})
-			}
+			AsbNetMode::Loopback(asb) => Self::create_loopback_reader(asb, counter, reader_config),
 			AsbNetMode::Null => {
 				let ringmaster = Arc::new(ReaderRingMaster::new(
 					reader_config.wire_format,
@@ -631,6 +609,31 @@ impl AsbConnection {
 			ringmaster: reader_ringmaster,
 			my_sender_id,
 			net: Arc::new(AsbReaderNet::Mqtt(
+				asb.clone(),
+				config.bus_topic.to_string(),
+			)),
+			callbacks_active: Default::default(),
+			listeners: Default::default(),
+			counter,
+		})
+	}
+
+	fn create_loopback_reader<'a, T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		asb: &Arc<LoopbackAsb>,
+		counter: PossessCtr,
+		config: ReaderConfig<'a>,
+	) -> Result<AsbReader<T>, CalError> {
+		let ringmaster = Arc::new(ReaderRingMaster::new(config.wire_format, config.qos));
+		let (prod, cons) = crossbeam_ring_channel::ring_bounded(config.qos.buffer.max(1));
+		let my_sender_id = ringmaster.add_sender(prod);
+		asb.add_reader(config.bus_topic).unwrap();
+
+		Ok(AsbReader {
+			buffer: cons,
+			expiration: config.qos.expiration,
+			ringmaster,
+			my_sender_id,
+			net: Arc::new(AsbReaderNet::Loopback(
 				asb.clone(),
 				config.bus_topic.to_string(),
 			)),
