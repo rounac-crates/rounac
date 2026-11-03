@@ -100,6 +100,16 @@ impl Asb {
 			.create_reader(topic, &self.config, &self.service_name)
 	}
 
+	/// Create a new [AsbReader] for the given [Topic].
+	pub async fn new_reader_async<T: for<'de> Deserialize<'de> + Send + Sync + 'static>(
+		&self,
+		topic: &str,
+	) -> Result<AsbReader<T>, CalError> {
+		self.connection
+			.create_reader_async(topic, &self.config, &self.service_name)
+			.await
+	}
+
 	/// Create a new [AsbWriter] for the given [Topic].
 	pub fn new_writer<T: Serialize + 'static>(
 		&self,
